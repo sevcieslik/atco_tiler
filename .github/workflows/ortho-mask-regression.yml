@@ -1,0 +1,22 @@
+name: Ortho mask regression
+
+on:
+  pull_request:
+    paths:
+      - "scripts/modules/process_orthos.py"
+      - "tests/test_ortho_masks.py"
+      - ".github/workflows/ortho-mask-regression.yml"
+  workflow_dispatch:
+
+jobs:
+  rasterio-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install test dependencies
+        run: python -m pip install --upgrade pip && python -m pip install numpy rasterio geopandas pyproj shapely
+      - name: Run TIFF/alpha tests
+        run: python -m unittest discover -s tests -p "test_ortho_masks.py" -v
