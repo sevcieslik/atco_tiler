@@ -774,9 +774,11 @@ class RetilerApp(tk.Tk):
             pb.configure(value=pct, style="TProgressbar")
             count.configure(text=f"{present} / {total}")
             if total and missing == 0:
-                self._set_badge(st,"✓ OK","ok")
-            elif total:
+                self._set_badge(st,"✓ Complete","ok")
+            elif total and present > 0:
                 self._set_badge(st,f"{missing} missing","warn")
+            elif total:
+                self._set_badge(st,"Not started","muted")
             else:
                 self._set_badge(st,"Not checked","muted")
         self._refresh_build_details()
