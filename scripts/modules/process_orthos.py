@@ -347,24 +347,33 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
     try:
         for p in chosen:
             datasets.append(rasterio.open(p))
+        # ATCO source ortho backgrounds sometimes use RGBI=(254,254,254,254)
+        # as an unmasked fill value. Reject precisely this four-band tuple
+        # *before* mosaicking: otherwise method='first' may select the white
+        # fringe and obscure real imagery from an overlapping source.
+        #
+        # The fifth merge band is an in-memory validity marker. It is never
+        # written to the client TIFF (which retains exactly four RGBI bands).
+        def merge_first_nonwhite(merged_data, new_data, merged_mask, new_mask, **kwargs):
+            candidate = ~np.any(new_mask[:4], axis=0)
+            background = np.all(new_data[:4] == 254, axis=0)
+            copy_pixel = (merged_data[4] == 0) & candidate & ~background
+            np.copyto(merged_data[:4], new_data[:4], where=copy_pixel[None, :, :])
+            merged_data[4][copy_pixel] = 1
+
         arr, affine = merge(
             datasets,
             bounds=bounds,
             res=res,
-            indexes=list(range(1, band_count+1)),
-            masked=True,
-            method='first',
+            indexes=[1, 2, 3, 4],
+            output_count=5,
+            masked=False,
+            nodata=0,
+            method=merge_first_nonwhite,
             target_aligned_pixels=False,
         )
-        if np.ma.isMaskedArray(arr):
-            # A pixel is usable only when ALL four data bands are valid.
-            # Previously a single valid band was enough, which promoted
-            # partially masked edge pixels into conspicuous light fringes.
-            source_valid = ~np.any(np.ma.getmaskarray(arr), axis=0)
-            data = np.ma.filled(arr, 0)
-        else:
-            source_valid = np.ones(arr.shape[1:], dtype=bool)
-            data = arr.copy()
+        source_valid = arr[4] == 1
+        data = arr[:4].copy()
         aoi_valid = geometry_mask([circuit_aoi], out_shape=data.shape[1:], transform=affine, invert=True)
         valid = source_valid & aoi_valid
         valid_pixels = int(valid.sum())
