@@ -1,0 +1,28 @@
+# Local environments and Python build files
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+# Local data and generated deliverables
+input/
+output/
+*.las
+*.laz
+*.zlas
+*.ecw
+*.tif
+*.tiff
+*.gdb/
+# Runtime state and machine-specific configuration
+scripts/config/runtime_env.txt
+scripts/config/runtime_ok.json
+scripts/config/atco_processor_config.json
+scripts/modules/ortho_processor_config.json
+# Externally licensed executables
+scripts/tools/EzLAS/*.exe
+# OS and GIS sidecars
+Thumbs.db
+.DS_Store
+*.aux.xml
+*.ovr
