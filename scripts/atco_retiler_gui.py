@@ -29,6 +29,21 @@ import atco_processor as core
 APP_NAME = "ATCO Retiler"
 APP_VERSION = "1.07"
 
+
+def current_commit():
+    """Show the local checked-out Git commit, never a stale release constant."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(PACKAGE_ROOT), "rev-parse", "--short=7", "HEAD"],
+            capture_output=True, text=True, timeout=3, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if result.returncode == 0:
+            return result.stdout.strip() or "unknown"
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+    return "unknown"
+
+
 # Palette
 NAV = "#0e1a26"
 NAV_2 = "#0b1620"
@@ -205,6 +220,11 @@ class RetilerApp(tk.Tk):
         self.header.pack_propagate(False)
 
         self._load_logo_header()
+        self.commit_badge = tk.Label(
+            self.header, text=f"Commit  {current_commit()}", bg="#1d3242",
+            fg="#d4e4ee", font=("Consolas", 10, "bold"), padx=14, pady=8,
+        )
+        self.commit_badge.pack(side="right", padx=(8, 22), pady=24)
 
         self.sidebar = tk.Frame(self, bg=NAV, width=222)
         self.sidebar.pack(side="left", fill="y")
@@ -231,6 +251,7 @@ class RetilerApp(tk.Tk):
             ("Data Sources", "▧"),
             ("Settings", "⚙"),
             ("QA & Reports", "▥"),
+            ("How to Start", "ⓘ"),
             ("About", "ⓘ"),
         ]
         for label, icon in items:
@@ -267,6 +288,7 @@ class RetilerApp(tk.Tk):
         self.pages["Data Sources"] = self._build_mapping_page()
         self.pages["Settings"] = self._build_settings_page()
         self.pages["QA & Reports"] = self._build_qa_page()
+        self.pages["How to Start"] = self._build_how_to_start_page()
         self.pages["About"] = self._build_about_page()
 
     def _load_logo_header(self):
@@ -405,6 +427,7 @@ class RetilerApp(tk.Tk):
         setup_outer, setup = self.card(page, "Project Setup")
         setup_outer.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
         setup.grid_columnconfigure(1, weight=1)
+        setup.grid_columnconfigure(3, minsize=180)
         for idx, (caption, entry_attr, command) in enumerate((
             ("Input (Project Data)", "input_entry", self.choose_input),
             ("Output (Deliverables)", "output_entry", self.choose_output),
@@ -417,13 +440,15 @@ class RetilerApp(tk.Tk):
             setattr(self, entry_attr, entry)
             self._dashboard_button(setup, "Browse", command).grid(
                 row=idx, column=2, sticky="ew", padx=(8, 6), pady=5)
-        self._dashboard_button(setup, "Open Output", self.open_output).grid(
-            row=1, column=3, sticky="ew", padx=(0, 14), pady=5)
-        self.context_label = self._dashboard_label(setup, "Not detected", size=9, color=MUTED)
-        self.context_label.grid(row=0, column=3, sticky="e", padx=(6, 14))
+        # Compact readiness lights on the right, as in the approved mockup.
         self.mapping_chip_frame = tk.Frame(setup, bg=CARD)
-        self.mapping_chip_frame.grid(row=2, column=0, columnspan=4,
-                                     sticky="w", padx=16, pady=(2, 7))
+        self.mapping_chip_frame.grid(row=0, column=3, rowspan=2,
+                                     sticky="nsw", padx=(18, 14), pady=(0, 4))
+        self.context_label = self._dashboard_label(setup, "Not detected", size=9, color=MUTED)
+        self.context_label.grid(row=2, column=0, columnspan=2, sticky="w",
+                                padx=16, pady=(0, 7))
+        self._dashboard_button(setup, "Open Output", self.open_output).grid(
+            row=2, column=2, sticky="e", padx=(8, 6), pady=(0, 7))
 
         # Progress table: checkboxes are the authoritative product selectors.
         progress_outer, progress = self.card(page, "Products & Progress")
@@ -539,13 +564,16 @@ class RetilerApp(tk.Tk):
         log_head = tk.Frame(log_panel, bg=CARD)
         log_head.pack(fill="x", padx=13, pady=(10, 7))
         self._dashboard_label(log_head, "▸  Activity Log", size=11, bold=True).pack(side="left")
-        self._dashboard_button(log_head, "Show Details ▼", self.toggle_log_details).pack(side="right")
+        self.log_toggle_btn = self._dashboard_button(
+            log_head, "Show Details ▼", self.toggle_log_details)
+        self.log_toggle_btn.pack(side="right")
         self._dashboard_button(log_head, "Open QA Folder", self.open_qa_folder).pack(side="right", padx=(0, 7))
         self._dashboard_button(log_head, "Clear", self.clear_log).pack(side="right", padx=(0, 7))
         self.log_text = tk.Text(log_panel, height=3, bg=LOG_BG, fg=LOG_TEXT,
                                 insertbackground=TEXT, relief="flat",
                                 font=("Consolas", 9), padx=10, pady=7, wrap="none")
-        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        # Log remains hidden until the operator explicitly expands it.
+        self.log_text.pack_forget()
         self.log_text.tag_configure("INFO", foreground="#82d7a0")
         self.log_text.tag_configure("WARN", foreground="#ffe29c")
         self.log_text.tag_configure("ERROR", foreground="#ff9292")
@@ -556,7 +584,12 @@ class RetilerApp(tk.Tk):
 
     def toggle_log_details(self):
         self._log_expanded = not self._log_expanded
-        self.log_text.configure(height=11 if self._log_expanded else 3)
+        if self._log_expanded:
+            self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+            self.log_toggle_btn.configure(text="Hide Details ▲")
+        else:
+            self.log_text.pack_forget()
+            self.log_toggle_btn.configure(text="Show Details ▼")
 
     def set_all_products(self, selected):
         if self.running:
@@ -647,6 +680,46 @@ class RetilerApp(tk.Tk):
         self.qa_tree.bind("<Double-1>", self._open_selected_qa)
         return page
 
+    # ---------- Quick start ----------
+    def _build_how_to_start_page(self):
+        page = tk.Frame(self.content_wrap, bg=BG)
+        tk.Label(page, text="How to Start", bg=BG, fg=TEXT,
+                 font=("Segoe UI", 18, "bold")).pack(anchor="w", padx=18, pady=(18, 8))
+        self._dashboard_label(
+            page, "ATCO Retiler production workflow", bg=BG, color=MUTED
+        ).pack(anchor="w", padx=18, pady=(0, 10))
+        steps = (
+            ("1. Select source data",
+             "Use Data Sources or Browse on Build. Input must contain AOI, orthos and point_cloud as required by your selected products."),
+            ("2. Check project and revision",
+             "Confirm the detected circuit/revision, the approved central segment count and the AOI / Orthos / LiDAR readiness indicators."),
+            ("3. Select deliverables",
+             "Tick TIFF, ECW, LAZ, zLAS and/or Tile Index in Products & Progress. ECW selects TIFF; zLAS selects LAZ."),
+            ("4. Validate setup",
+             "Click Validate Setup and resolve missing tools or central data before processing. Check Global Mapper for ECW and EzLAS for zLAS."),
+            ("5. Run or recover",
+             "Run Build overwrites existing selected outputs after confirmation. Rerun Missing only fills missing products. Pause and Stop apply to active builds."),
+            ("6. Review QA and deliver",
+             "Open QA & Reports and verify imagery extent/masks, ECW transparency, LAZ classifications, zLAS equivalence and Tile Index attributes."),
+        )
+        for heading, description in steps:
+            outer, inner = self.card(page)
+            outer.pack(fill="x", padx=18, pady=5)
+            self._dashboard_label(inner, heading, bold=True).pack(
+                anchor="w", padx=16, pady=(10, 4))
+            tk.Label(inner, text=description, bg=CARD, fg=MUTED,
+                     font=("Segoe UI", 10), justify="left", wraplength=920
+                     ).pack(anchor="w", padx=16, pady=(0, 12))
+        row = tk.Frame(page, bg=BG)
+        row.pack(fill="x", padx=18, pady=(8, 15))
+        self._dashboard_button(
+            row, "Technical Notes", lambda: self._open_doc("technical_notes.html")
+        ).pack(side="left", padx=(0, 8))
+        self._dashboard_button(
+            row, "FAQ / Troubleshooting", lambda: self._open_doc("faq_troubleshooting_qa.html")
+        ).pack(side="left")
+        return page
+
     # ---------- About ----------
     def _build_about_page(self):
         page = tk.Frame(self.content_wrap, bg=BG)
@@ -711,7 +784,7 @@ class RetilerApp(tk.Tk):
             w.destroy()
         for key,label in (("aoi","AOI"),("orthos","Orthos"),("point_cloud","Point Cloud (LiDAR)")):
             ok = self.mapped.get(key) is not None
-            self.badge(self.mapping_chip_frame, f"{'✓' if ok else '✕'}  {label}", "ok" if ok else "bad").pack(side="left", padx=(0,8))
+            self.badge(self.mapping_chip_frame, f"{'●' if ok else '○'}  {label}", "ok" if ok else "bad").pack(side="top", anchor="w", pady=3)
 
         for w in self.mapping_detail.winfo_children():
             w.destroy()
