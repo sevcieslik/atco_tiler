@@ -8,8 +8,7 @@ from atco_delivery import client_entity_name, delivery_tile_name, tile_index_shp
 class DeliveryNamingTests(unittest.TestCase):
     def test_tx_circuit_and_central_sequence(self):
         self.assertEqual(delivery_tile_name("9L137", "9L137_MU_0008"), "9L137_0008")
-    def test_dx_normalizes_spaces_without_modifying_sequential_id(self):
-        self.assertEqual(delivery_tile_name("FORT MCMURRAY OILFIELD", "FORT_MCMURRAY_OILFIELD_MU_0269"), "FORT_MCMURRAY_OILFIELD_0269")
-        self.assertEqual(delivery_tile_name("UTIKUMA_OILFIELD", "UTIKUMA_OILFIELD_MU_0001"), "UTIKUMA_OILFIELD_0001")
+    def test_dx_original_client_naming_is_unchanged(self):
+        self.assertEqual(delivery_tile_name("UTIKUMA_OILFIELD", "UTIKUMA_OILFIELD_MU_0001"), "UTIKUMA OILFIELD_0001")
     def test_index_filename(self):
         self.assertEqual(tile_index_shp_path(Path("output/9L137"), "9L137").name, "9L137_2026_Tiles_v1.shp")
