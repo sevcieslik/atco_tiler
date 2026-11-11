@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ATCO Retiler v1.06 - Technical Notes</title>
+<style>
+:root{--nav:#18232d;--ink:#17212b;--muted:#64717c;--line:#d5dde3;--green:#2e9638;--soft:#f5f7f9;--blue:#1769d2;--amber:#996500}
+*{box-sizing:border-box} body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);background:#eef2f5;line-height:1.55}
+header{background:var(--nav);color:#fff;padding:28px 36px} header h1{margin:0;font-size:28px} header p{margin:6px 0 0;color:#d7e0e6}
+main{max-width:1180px;margin:22px auto 60px;padding:0 22px}.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:22px 26px;margin:14px 0}
+h2{font-size:20px;margin:0 0 12px} h3{font-size:16px;margin:22px 0 8px} table{width:100%;border-collapse:collapse;margin:12px 0 6px} th,td{border-bottom:1px solid #e3e8ec;text-align:left;vertical-align:top;padding:9px 10px} th{background:#f4f7f9}
+code{background:#eef2f5;padding:2px 5px;border-radius:4px} .path{font-family:Consolas,monospace;word-break:break-all}.note{border-left:4px solid var(--green);padding:10px 14px;background:#f0f8f1}.warn{border-left:4px solid #d79a1b;padding:10px 14px;background:#fff8e8}.small{color:var(--muted);font-size:13px}
+ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18px;white-space:nowrap}
+</style>
+</head>
+<body>
+<header><h1>ATCO Retiler v1.06 - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
+<main>
+<div class="card toc"><strong>Contents:</strong> <a href="#sources">Authoritative sources</a><a href="#naming">Naming</a><a href="#tiff">TIFF</a><a href="#ecw">ECW</a><a href="#laz">LAZ</a><a href="#zlas">zLAS</a><a href="#tiles">Tile Index</a><a href="#trajectory">Trajectory attribution</a><a href="#qa">QA outputs</a></div>
+
+<section class="card" id="sources"><h2>1. Authoritative sources and geometry</h2>
+<p>Retiler does not create or edit production segment geometry. It validates the selected AOI against the central registry, then loads the approved segment revision from the W drive.</p>
+<table><tr><th>Source</th><th>Purpose</th></tr>
+<tr><td class="path">W:\APPS\PIT\ATCO\database\atco_aoi_master.sqlite</td><td>Central AOI registry and current revision validation.</td></tr>
+<tr><td class="path">W:\APPS\PIT\ATCO\segments\circuit\&lt;ENTITY&gt;\&lt;AOI_REV&gt;</td><td>Approved segment geometry. These files remain unchanged by Retiler.</td></tr>
+<tr><td class="path">W:\APPS\PIT\ATCO\source\trajectories</td><td>Central SBET / trajectory index used for TX tile attribution.</td></tr>
+<tr><td class="path">Input\orthos</td><td>Source RGBI GeoTIFF imagery.</td></tr>
+<tr><td class="path">Input\point_cloud</td><td>Source LAS/LAZ point cloud.</td></tr></table>
+<div class="note">Approved W-drive segments remain the geometry source of truth. Their historical <code>_MU_####</code> IDs are internal only and are not republished or rewritten.</div>
+</section>
+
+<section class="card" id="naming"><h2>2. Delivery naming</h2>
+<p><strong>MU</strong> meant Management Unit and is no longer used in client-facing filenames. Retiler derives the stable sequence from the approved central BlockNum.</p>
+<table><tr><th>Entity</th><th>Central ID example</th><th>Delivery name example</th></tr>
+<tr><td>TX</td><td><code>9L137_MU_0001</code></td><td><code>9L137_0001</code></td></tr>
+<tr><td>DX</td><td><code>UTIKUMA_OILFIELD_MU_0001</code></td><td><code>UTIKUMA OILFIELD_0001</code></td></tr></table>
+<p>DX client-facing entity names follow the names used in the SoW SQLite, including spaces. The sequential number is unique within the entity; the complete entity + sequence name is unique within the project.</p>
+<p>AOI revision remains metadata and does not create an extra <code>R01</code> delivery folder.</p>
+</section>
+
+<section class="card" id="tiff"><h2>3. TIFF generation</h2>
+<p><strong>Purpose:</strong> 4-band RGBI client orthophoto tiles aligned to the approved ATCO segment workflow.</p>
+<ul><li>Source TIFFs are validated for CRS, pixel size, common pixel lattice and 4-band RGBI content.</li>
+<li>Retiler creates internal <strong>Ortho Processing Footprints</strong> aligned to the source pixel grid. These are processing footprints, not the client Tile Index.</li>
+<li>Source imagery is mosaicked/cropped to the processing footprint and masked outside the full circuit AOI.</li>
+<li>Final TIFF remains four bands: Red, Green, Blue, NIR. Band 4 is not Alpha.</li>
+<li>ArcGIS-safe background rule: only <code>255,255,255,255</code> is background/NoData. Valid 255 values are preserved as 254 to avoid per-band NoData ambiguity.</li>
+<li>Final GeoTIFF is tiled, LZW compressed, 512 × 512 internal blocks.</li></ul>
+<div class="warn"><strong>QA:</strong> inspect at least one edge/overlap location in ArcGIS Pro. Confirm outside-AOI background is transparent/NoData, band 4 remains NIR, and no black/white edge artefacts are visible.</div>
+</section>
+
+<section class="card" id="ecw"><h2>4. ECW generation</h2>
+<p><strong>Purpose:</strong> 3-band visual RGB ECW for PLS / visual use.</p>
+<ul><li>Generated from the final TIFF, not directly from source imagery.</li>
+<li>A temporary Global Mapper input is written under <code>QA\Imagery\gm_rgb_input</code>.</li>
+<li>The temporary file contains RGB plus an Alpha band derived from the TIFF validity mask. NIR is deliberately excluded from this temporary fourth band.</li>
+<li>Global Mapper imports bands 1,2,3 with no contrast enhancement and uses band 4 only as Alpha.</li>
+<li>ECW format v3, target compression 10:1.</li></ul>
+<div class="warn"><strong>QA:</strong> compare ECW against the corresponding TIFF and inspect tile boundaries in PLS. The ECW is a visual RGB product and is not expected to retain NIR.</div>
+</section>
+
+<section class="card" id="laz"><h2>5. LAZ generation</h2>
+<p><strong>Purpose:</strong> exact segment crop of the classified source point cloud.</p>
+<ul><li>PDAL inventories source LAS/LAZ and validates the horizontal CRS against the AOI.</li>
+<li>Compound CRS / vertical datum from source point clouds is preserved where consistently present.</li>
+<li>All intersecting source clouds are merged and cropped to the exact approved segment polygon.</li>
+<li>Only Classification 7 (Low Noise) is removed.</li>
+<li>Other classifications and point attributes are preserved.</li>
+<li>Retiler does <strong>not</strong> automatically change Synthetic flags.</li></ul>
+<div class="note">Return Number 0 is a QA condition, not an automatic edit rule. The current QA reports Return 0 by Synthetic flag and classification so unusual cases such as Class 93 can be reviewed rather than silently modified.</div>
+</section>
+
+<section class="card" id="zlas"><h2>6. zLAS generation</h2>
+<ul><li>A conservative temporary uncompressed LAS is created from each final LAZ.</li>
+<li>Standalone Esri <code>EzLAS.exe</code> converts the temporary LAS to zLAS.</li>
+<li>Each zLAS is verified using EzLAS verification mode before being accepted.</li>
+<li>EzLAS logs, work folders and command details are kept under <code>QA\LiDAR\EzLAS</code>.</li>
+<li>The delivery <code>zLAS</code> folder is cleaned so it contains only <code>.zlas</code> products.</li>
+<li>EzLAS processes are launched hidden. Operator-facing command windows should not appear during normal processing.</li></ul>
+<div class="warn"><strong>QA:</strong> load a sample zLAS in ArcGIS Pro and compare with its LAZ for extent, point count, classifications and general appearance.</div>
+</section>
+
+<section class="card" id="tiles"><h2>7. Tile Index</h2>
+<p>Retiler creates an <strong>intermediate shapefile</strong> under <code>Tile_Index</code>. It is not the final project GDB. During final delivery assembly this SHP is imported as the <code>TILES</code> feature class together with the other GDB products.</p>
+<h3>TX SHP fields</h3>
+<table><tr><th>Field</th><th>Meaning / source</th></tr>
+<tr><td>BlockNum</td><td>Stable sequential tile ID derived from the approved central segment.</td></tr>
+<tr><td>ZONE</td><td>UTM zone derived from the entity CRS.</td></tr>
+<tr><td>YEAR</td><td>2026.</td></tr>
+<tr><td>LINE</td><td>TX circuit code, e.g. 9L137.</td></tr>
+<tr><td>NAME</td><td>Client-facing tile name, e.g. 9L137_0001.</td></tr>
+<tr><td>fldate</td><td>Acquisition date(s) matched from the trajectory/SBET index using final LAZ GPS time.</td></tr>
+<tr><td>Flightline</td><td>Flightline code(s) matched from the trajectory/SBET index.</td></tr></table>
+<h3>DX SHP fields</h3>
+<table><tr><th>Field</th><th>Meaning / source</th></tr>
+<tr><td>PRJ_NAME</td><td>Client entity name corresponding to the SoW SQLite name.</td></tr>
+<tr><td>YEAR</td><td>2026.</td></tr>
+<tr><td>ZONE</td><td>UTM zone derived from the entity CRS.</td></tr></table>
+<p>The historic DX join fields <code>Join_Count</code>, <code>TARGET_FID</code> and <code>OGLAbbrev</code> are intentionally not produced. They were identified as join/licensing artefacts rather than useful tile attributes.</p>
+<p class="small">When imported to the final File GDB, ArcGIS will create GDB-managed fields such as OBJECTID, Shape and geometry length/area fields.</p>
+</section>
+
+<section class="card" id="trajectory"><h2>8. TX trajectory attribution</h2>
+<p>The central trajectory source is built from the current/highest available processed trajectory version for each flight. The index stores flight date, flightline code and adjusted GPS-time range.</p>
+<p>For each TX final LAZ, Retiler reads the tile GPS-time range and finds overlapping SBET/trajectory records. Matching dates populate <code>fldate</code>; matching codes populate <code>Flightline</code>. Multiple values are retained as comma-separated values.</p>
+<div class="warn">Blank TX flight attribution means no reliable GPS-time match was found. Do not invent a value; review the trajectory index and LAZ GPS-time metadata.</div>
+</section>
+
+<section class="card" id="qa"><h2>9. QA outputs and reruns</h2>
+<table><tr><th>QA area</th><th>Typical outputs</th></tr>
+<tr><td>QA\Imagery</td><td>Processing footprint overlap report, Global Mapper scripts/logs, RGB(A) intermediates and imagery processing report.</td></tr>
+<tr><td>QA\LiDAR</td><td>Source inventory, processing report, Return 0 / Synthetic-by-class report and execution metadata.</td></tr>
+<tr><td>QA\LiDAR\EzLAS</td><td>EzLAS conversion/verification logs, command records and validation CSV.</td></tr>
+<tr><td>QA\TILES</td><td>Tile Index attribute export and schema JSON.</td></tr></table>
+<p><strong>Run Build</strong> overwrites selected existing products after confirmation. <strong>Rerun Missing</strong> fills only missing/invalid products where possible. QA should be reviewed before assuming a rerun is required.</p>
+</section>
+
+<p class="small">ATCO Retiler v1.06 · Bugs, improvements and issues: pit@nmgroup.com</p>
+</main></body></html>

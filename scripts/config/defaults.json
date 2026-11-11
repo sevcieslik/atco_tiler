@@ -1,0 +1,7 @@
+{
+  "client_gdb": "",
+  "central_root": "",
+  "trajectory_root": "",
+  "ezlas_relative": "tools\\EzLAS\\EzLAS.exe",
+  "parallel_workers": -1
+}

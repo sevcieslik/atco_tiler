@@ -1,0 +1,9 @@
+Place the official Esri LAS Optimizer executable here and name it exactly:
+
+    EzLAS.exe
+
+Expected package-relative path:
+    scripts\tools\EzLAS\EzLAS.exe
+
+The operator is not asked for an EzLAS path.
+LAZ-only modes do not require this executable.
