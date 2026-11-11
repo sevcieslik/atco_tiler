@@ -24,7 +24,7 @@ def client_entity_name(entity: str) -> str:
     and consistent across TIFF, ECW, LAZ, zLAS and the Tile Index.
     """
     entity = str(entity).strip()
-    return entity if is_tx(entity) else re.sub(r"\\s+", "_", entity)
+    return entity if is_tx(entity) else re.sub(r"\s+", "_", entity)
 
 
 def tile_sequence(blocknum: str) -> str:
