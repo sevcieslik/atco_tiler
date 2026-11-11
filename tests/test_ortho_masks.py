@@ -67,6 +67,45 @@ class OrthoMaskTests(unittest.TestCase):
                 self.assertEqual(ds.read(4)[1,0], 255)
                 np.testing.assert_array_equal(ds.read([1,2,3])[:,1,0], rgbn[:3,1,0])
 
+    def test_254_background_is_ignored_before_overlapping_mosaic(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            profile = dict(driver="GTiff", width=16, height=16, count=4,
+                           dtype="uint8", crs="EPSG:3857",
+                           transform=from_origin(0, 16, 1, 1), nodata=None)
+            first = np.full((4, 16, 16), 70, dtype=np.uint8)
+            first[:, 0, :] = 254  # visually white unmasked edge fringe
+            first[:, 1, 1] = [255, 200, 255, 150]  # real bright pixel
+            second = np.full((4, 16, 16), 90, dtype=np.uint8)
+            for name, data in (("first.tif", first), ("second.tif", second)):
+                with rasterio.open(root / name, "w", **profile) as dst:
+                    dst.write(data)
+            out = root / "tile.tif"
+            export_tile("TEST", (0, 0, 16, 16), box(0,0,16,16),
+                        [root / "first.tif", root / "second.tif"],
+                        out, 4, "EPSG:3857", (1,1))
+            with rasterio.open(out) as ds:
+                np.testing.assert_array_equal(ds.read()[:,0,0], second[:,0,0])
+                np.testing.assert_array_equal(ds.read()[:,1,1], first[:,1,1])
+                self.assertEqual(ds.dataset_mask()[0,0], 255)
+
+    def test_254_background_without_fallback_becomes_transparent(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            data = np.full((4,16,16), 80, dtype=np.uint8)
+            data[:,0,:] = 254
+            source = root / "source.tif"
+            with rasterio.open(source, "w", driver="GTiff", width=16, height=16,
+                               count=4, dtype="uint8", crs="EPSG:3857",
+                               transform=from_origin(0,16,1,1)) as ds:
+                ds.write(data)
+            out = root / "tile.tif"
+            export_tile("TEST", (0,0,16,16), box(0,0,16,16),
+                        [source], out, 4, "EPSG:3857", (1,1))
+            with rasterio.open(out) as ds:
+                self.assertTrue(np.all(ds.dataset_mask()[0,:] == 0))
+                self.assertTrue(np.all(ds.dataset_mask()[1,:] == 255))
+
     def test_gm_script_keeps_alpha_and_uses_ecw_v3_transparency(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
