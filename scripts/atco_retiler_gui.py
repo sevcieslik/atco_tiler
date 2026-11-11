@@ -112,6 +112,79 @@ def memory_gb():
     return None
 
 
+class RoundedActionButton(tk.Canvas):
+    """Canvas-backed button: rounded geometry, hover and disabled states.
+
+    Implements the small subset of Tk Button's configure interface used by
+    build/pause/resume callbacks, so the processing code is unchanged.
+    """
+    def __init__(self, parent, text, command, *, primary=False):
+        self._text = text
+        self._command = command
+        self._state = "normal"
+        self._primary = primary
+        self._hover = False
+        width = max(116, 18 + len(text) * 8)
+        super().__init__(parent, width=width, height=40, bg=CARD,
+                         highlightthickness=0, bd=0, relief="flat",
+                         cursor="hand2")
+        self.bind("<Configure>", lambda _event: self._redraw())
+        self.bind("<Enter>", self._enter)
+        self.bind("<Leave>", self._leave)
+        self.bind("<Button-1>", self._click)
+        self._redraw()
+
+    def _enter(self, _event):
+        self._hover = True
+        self._redraw()
+
+    def _leave(self, _event):
+        self._hover = False
+        self._redraw()
+
+    def _click(self, _event):
+        if self._state == "normal" and self._command:
+            self._command()
+
+    def _redraw(self):
+        self.delete("all")
+        w, h = max(self.winfo_width(), 24), max(self.winfo_height(), 24)
+        disabled = self._state != "normal"
+        fill = ("#305344" if disabled and self._primary else "#304355" if disabled
+                else GREEN_DARK if self._primary and self._hover
+                else GREEN if self._primary else "#36576d" if self._hover
+                else "#2a465d")
+        foreground = "#8ea99a" if disabled and self._primary else "#8198aa" if disabled else "#ffffff"
+        r = 9
+        points = [r, 1, w-r, 1, w-1, 1, w-1, r,
+                  w-1, h-r, w-1, h-1, w-r, h-1,
+                  r, h-1, 1, h-1, 1, h-r, 1, r, 1, 1]
+        self.create_polygon(points, fill=fill, outline="", smooth=True,
+                            splinesteps=12)
+        self.create_text(w // 2, h // 2, text=self._text, fill=foreground,
+                         font=("Segoe UI", 10, "bold" if self._primary else "normal"))
+
+    def configure(self, cnf=None, **kwargs):
+        if isinstance(cnf, dict):
+            kwargs = {**cnf, **kwargs}
+        if "state" in kwargs:
+            self._state = str(kwargs.pop("state"))
+        if "text" in kwargs:
+            self._text = str(kwargs.pop("text"))
+        if kwargs:
+            super().configure(**kwargs)
+        self._redraw()
+
+    config = configure
+
+    def __getitem__(self, key):
+        if key == "state":
+            return self._state
+        if key == "text":
+            return self._text
+        return super().__getitem__(key)
+
+
 class RetilerApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -366,15 +439,7 @@ class RetilerApp(tk.Tk):
                         **options)
 
     def _dashboard_button(self, parent, text, command, *, primary=False):
-        return tk.Button(
-            parent, text=text, command=command,
-            bg=GREEN if primary else ROW_BG,
-            fg="#ffffff" if primary else TEXT,
-            activebackground=GREEN_DARK if primary else BLUE_SOFT,
-            activeforeground="#ffffff",
-            font=("Segoe UI", 10, "bold" if primary else "normal"),
-            bd=0, relief="flat", padx=12, pady=10, cursor="hand2",
-        )
+        return RoundedActionButton(parent, text, command, primary=primary)
 
     def _build_build_page(self):
         # Canvas viewport prevents lower products from being clipped on
