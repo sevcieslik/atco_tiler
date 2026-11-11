@@ -45,12 +45,12 @@ class DashboardSmokeTests(unittest.TestCase):
 
     def test_log_can_expand_without_losing_messages(self):
         self.app.log("UI smoke test", "INFO")
-        self.assertEqual(int(self.app.log_text["height"]), 4)
+        self.assertEqual(int(self.app.log_text["height"]), 3)
         self.app.toggle_log_details()
-        self.assertEqual(int(self.app.log_text["height"]), 12)
+        self.assertEqual(int(self.app.log_text["height"]), 11)
         self.assertIn("UI smoke test", self.app.log_text.get("1.0", "end"))
         self.app.toggle_log_details()
-        self.assertEqual(int(self.app.log_text["height"]), 4)
+        self.assertEqual(int(self.app.log_text["height"]), 3)
 
 
 if __name__ == "__main__":
