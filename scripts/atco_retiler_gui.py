@@ -27,28 +27,28 @@ sys.path.insert(0, str(TOOL_ROOT))
 import atco_processor as core
 
 APP_NAME = "ATCO Retiler"
-APP_VERSION = "1.06"
+APP_VERSION = "1.07"
 
 # Palette
-NAV = "#18232d"
-NAV_2 = "#111a22"
-BG = "#edf1f4"
-CARD = "#ffffff"
-BORDER = "#cdd5dc"
-TEXT = "#17212b"
-MUTED = "#66727d"
-GREEN = "#35a840"
-GREEN_DARK = "#2e9638"
-GREEN_SOFT = "#e7f5e8"
-BLUE = "#1769d2"
-BLUE_SOFT = "#e8f1fd"
-RED = "#c83e3e"
-RED_SOFT = "#fae9e9"
-AMBER = "#d99a1b"
-AMBER_SOFT = "#fff4d8"
-LOG_BG = "#111820"
-LOG_TEXT = "#e5ebef"
-ROW_BG = "#f8fafb"
+NAV = "#0e1a26"
+NAV_2 = "#0b1620"
+BG = "#102132"
+CARD = "#1b3042"
+BORDER = "#3c5769"
+TEXT = "#edf5fa"
+MUTED = "#a8bdcb"
+GREEN = "#27a43e"
+GREEN_DARK = "#208b35"
+GREEN_SOFT = "#183e31"
+BLUE = "#4f9ed8"
+BLUE_SOFT = "#203d56"
+RED = "#f07373"
+RED_SOFT = "#49313c"
+AMBER = "#f0ba54"
+AMBER_SOFT = "#4a4031"
+LOG_BG = "#0c1b29"
+LOG_TEXT = "#dce9f3"
+ROW_BG = "#22384c"
 
 
 def human_path(p):
@@ -101,7 +101,7 @@ class RetilerApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title(f"{APP_NAME} v{APP_VERSION}")
-        self.geometry("1480x900")
+        self.geometry("1560x940")
         self.minsize(1180, 760)
         self.configure(bg=BG)
         self.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -172,19 +172,19 @@ class RetilerApp(tk.Tk):
             pass
 
         style.configure("TProgressbar",
-                        troughcolor="#dce3e8",
+                        troughcolor="#405a70",
                         background=GREEN,
-                        bordercolor="#dce3e8",
+                        bordercolor="#405a70",
                         lightcolor=GREEN,
                         darkcolor=GREEN,
-                        thickness=13)
+                        thickness=10)
         style.configure("Blue.Horizontal.TProgressbar",
-                        troughcolor="#dce3e8",
+                        troughcolor="#405a70",
                         background=BLUE,
-                        bordercolor="#dce3e8",
+                        bordercolor="#405a70",
                         lightcolor=BLUE,
                         darkcolor=BLUE,
-                        thickness=13)
+                        thickness=10)
         style.configure("Treeview",
                         background=CARD,
                         fieldbackground=CARD,
@@ -192,21 +192,21 @@ class RetilerApp(tk.Tk):
                         rowheight=27,
                         borderwidth=0)
         style.configure("Treeview.Heading",
-                        background="#f2f5f7",
+                        background=ROW_BG,
                         foreground=TEXT,
                         relief="flat",
                         font=("Segoe UI", 9, "bold"))
-        style.map("Treeview", background=[("selected", "#dbeaf8")], foreground=[("selected", TEXT)])
+        style.map("Treeview", background=[("selected", BLUE_SOFT)], foreground=[("selected", TEXT)])
 
     # ---------- shell ----------
     def _build_shell(self):
-        self.header = tk.Frame(self, bg=NAV_2, height=82)
+        self.header = tk.Frame(self, bg=NAV_2, height=86)
         self.header.pack(side="top", fill="x")
         self.header.pack_propagate(False)
 
         self._load_logo_header()
 
-        self.sidebar = tk.Frame(self, bg=NAV, width=210)
+        self.sidebar = tk.Frame(self, bg=NAV, width=222)
         self.sidebar.pack(side="left", fill="y")
         self.sidebar.pack_propagate(False)
 
@@ -228,9 +228,9 @@ class RetilerApp(tk.Tk):
         self.nav_buttons = {}
         items = [
             ("Build", "▶"),
-            ("Input & Mapping", "▣"),
+            ("Data Sources", "▧"),
             ("Settings", "⚙"),
-            ("QA & Logs", "☷"),
+            ("QA & Reports", "▥"),
             ("About", "ⓘ"),
         ]
         for label, icon in items:
@@ -254,7 +254,7 @@ class RetilerApp(tk.Tk):
         )
         self.tech_notes_btn.pack(fill="x", padx=10, pady=(0,2))
         self.faq_btn = tk.Button(
-            self.sidebar, text="  ?   FAQ / Troubleshooting / QA", anchor="w",
+            self.sidebar, text="  ?   FAQ / Troubleshooting", anchor="w",
             relief="flat", bd=0, bg=NAV, fg="#eef3f6",
             activebackground="#263642", activeforeground="white",
             font=("Segoe UI", 10), padx=12, pady=10,
@@ -264,9 +264,9 @@ class RetilerApp(tk.Tk):
 
         self.pages = {}
         self.pages["Build"] = self._build_build_page()
-        self.pages["Input & Mapping"] = self._build_mapping_page()
+        self.pages["Data Sources"] = self._build_mapping_page()
         self.pages["Settings"] = self._build_settings_page()
-        self.pages["QA & Logs"] = self._build_qa_page()
+        self.pages["QA & Reports"] = self._build_qa_page()
         self.pages["About"] = self._build_about_page()
 
     def _load_logo_header(self):
@@ -299,9 +299,9 @@ class RetilerApp(tk.Tk):
         for n,b in self.nav_buttons.items():
             b.configure(bg=GREEN if n == name else NAV,
                         activebackground=GREEN_DARK if n == name else "#263642")
-        if name == "QA & Logs":
+        if name == "QA & Reports":
             self.refresh_qa_tree()
-        elif name == "Input & Mapping":
+        elif name == "Data Sources":
             self.refresh_mapping()
 
     def _open_doc(self, filename):
@@ -322,124 +322,178 @@ class RetilerApp(tk.Tk):
 
     def badge(self, parent, text, kind="ok"):
         colors = {
-            "ok": (GREEN_SOFT, GREEN_DARK),
-            "run": (BLUE_SOFT, BLUE),
-            "bad": (RED_SOFT, RED),
-            "warn": (AMBER_SOFT, "#a76c00"),
-            "muted": ("#eef1f3", MUTED)
+            "ok": (GREEN_SOFT, "#8fe4a2"),
+            "run": (BLUE_SOFT, "#a2d5f7"),
+            "bad": (RED_SOFT, "#ffc5c5"),
+            "warn": (AMBER_SOFT, "#ffe0a1"),
+            "muted": (ROW_BG, MUTED)
         }
         bg, fg = colors.get(kind, colors["muted"])
         return tk.Label(parent, text=text, bg=bg, fg=fg, padx=9, pady=3,
                         font=("Segoe UI", 9, "bold"))
 
-    # ---------- Build page ----------
+    # ---------- Build dashboard ----------
+    def _dashboard_label(self, parent, text, *, size=10, bold=False,
+                         color=TEXT, bg=CARD, **options):
+        return tk.Label(parent, text=text, bg=bg, fg=color,
+                        font=("Segoe UI", size, "bold" if bold else "normal"),
+                        **options)
+
+    def _dashboard_button(self, parent, text, command, *, primary=False):
+        return tk.Button(
+            parent, text=text, command=command,
+            bg=GREEN if primary else ROW_BG,
+            fg="#ffffff" if primary else TEXT,
+            activebackground=GREEN_DARK if primary else BLUE_SOFT,
+            activeforeground="#ffffff",
+            font=("Segoe UI", 10, "bold" if primary else "normal"),
+            bd=0, relief="flat", padx=12, pady=10, cursor="hand2",
+        )
+
     def _build_build_page(self):
         page = tk.Frame(self.content_wrap, bg=BG)
-        page.grid_columnconfigure(0, weight=3)
-        page.grid_columnconfigure(1, weight=2)
-        page.grid_rowconfigure(3, weight=1)
-        page.grid_rowconfigure(4, weight=1)
+        page.grid_columnconfigure(0, weight=7)
+        page.grid_columnconfigure(1, weight=4)
+        page.grid_rowconfigure(2, weight=1)
+        page.grid_rowconfigure(3, weight=0)
 
-        top = tk.Frame(page, bg=BG)
-        top.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(12,6))
-        top.grid_columnconfigure(0, weight=1)
-        top.grid_columnconfigure(1, weight=1)
+        # Live context tiles.
+        metrics = tk.Frame(page, bg=BG)
+        metrics.grid(row=0, column=0, columnspan=2, sticky="ew", padx=12, pady=(14, 6))
+        for i in range(4):
+            metrics.grid_columnconfigure(i, weight=1, uniform="metric")
+        self.summary_values = {}
+        summaries = (
+            ("project", "ACTIVE PROJECT", "Awaiting input", "Circuit / AOI revision"),
+            ("sources", "INPUT DATA", "—", "Ortho TIFFs + LiDAR files"),
+            ("products", "SELECTED PRODUCTS", "5", "TIFF · ECW · LAZ · zLAS · Index"),
+            ("segments", "SEGMENTS", "—", "Tiles to process"),
+        )
+        for i, (key, heading, value, hint) in enumerate(summaries):
+            outer, inner = self.card(metrics)
+            outer.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 5, 0 if i == 3 else 5))
+            self._dashboard_label(inner, heading, size=9, color=MUTED).pack(
+                anchor="w", padx=16, pady=(11, 2))
+            label = self._dashboard_label(inner, value, size=18, bold=True)
+            label.pack(anchor="w", padx=16)
+            self.summary_values[key] = label
+            self._dashboard_label(inner, hint, size=9, color=MUTED).pack(
+                anchor="w", padx=16, pady=(1, 11))
 
-        c1, i1 = self.card(top, "Input (Project Data)")
-        c1.grid(row=0, column=0, sticky="ew", padx=(0,6))
-        row = tk.Frame(i1, bg=CARD); row.pack(fill="x", padx=16, pady=(0,8))
-        self.input_entry = tk.Entry(row, relief="solid", bd=1, font=("Segoe UI",10))
-        self.input_entry.pack(side="left", fill="x", expand=True, ipady=7)
-        tk.Button(row, text="Browse", command=self.choose_input,
-                  bg="#f4f6f7", fg=TEXT, relief="solid", bd=1,
-                  font=("Segoe UI",9)).pack(side="left", padx=(8,0), ipady=5)
+        # Compact input/output setup shared with the Data Sources page.
+        setup_outer, setup = self.card(page, "Project Setup")
+        setup_outer.grid(row=1, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
+        setup.grid_columnconfigure(1, weight=1)
+        for idx, (caption, entry_attr, command) in enumerate((
+            ("Input (Project Data)", "input_entry", self.choose_input),
+            ("Output (Deliverables)", "output_entry", self.choose_output),
+        )):
+            self._dashboard_label(setup, caption, size=9).grid(
+                row=idx, column=0, sticky="w", padx=(16, 12), pady=5)
+            entry = tk.Entry(setup, bg=NAV_2, fg=TEXT, insertbackground=TEXT,
+                             relief="flat", bd=0, font=("Consolas", 10))
+            entry.grid(row=idx, column=1, sticky="ew", ipady=8, pady=5)
+            setattr(self, entry_attr, entry)
+            self._dashboard_button(setup, "Browse", command).grid(
+                row=idx, column=2, sticky="ew", padx=(8, 6), pady=5)
+        self._dashboard_button(setup, "Open Output", self.open_output).grid(
+            row=1, column=3, sticky="ew", padx=(0, 14), pady=5)
+        self.context_label = self._dashboard_label(setup, "Not detected", size=9, color=MUTED)
+        self.context_label.grid(row=0, column=3, sticky="e", padx=(6, 14))
+        self.mapping_chip_frame = tk.Frame(setup, bg=CARD)
+        self.mapping_chip_frame.grid(row=2, column=0, columnspan=4,
+                                     sticky="w", padx=16, pady=(4, 10))
 
-        self.mapping_chip_frame = tk.Frame(i1, bg=CARD)
-        self.mapping_chip_frame.pack(fill="x", padx=16, pady=(0,13))
+        # Progress table: checkboxes are the authoritative product selectors.
+        progress_outer, progress = self.card(page, "Products & Progress")
+        progress_outer.grid(row=2, column=0, sticky="nsew", padx=(12, 6), pady=6)
+        progress.grid_columnconfigure(0, weight=1)
+        toolbar = tk.Frame(progress, bg=CARD)
+        toolbar.grid(row=0, column=0, sticky="ew", padx=14, pady=(0, 7))
+        self.selected_count_label = self._dashboard_label(
+            toolbar, "5 products selected", size=9, color=MUTED)
+        self.selected_count_label.pack(side="left")
+        self._dashboard_button(toolbar, "Select All", lambda: self.set_all_products(True)).pack(
+            side="right", padx=(6, 0))
+        self._dashboard_button(toolbar, "Deselect All", lambda: self.set_all_products(False)).pack(
+            side="right", padx=(6, 0))
 
-        c2, i2 = self.card(top, "Output (Deliverables)")
-        c2.grid(row=0, column=1, sticky="ew", padx=(6,0))
-        row2 = tk.Frame(i2, bg=CARD); row2.pack(fill="x", padx=16, pady=(0,8))
-        self.output_entry = tk.Entry(row2, relief="solid", bd=1, font=("Segoe UI",10))
-        self.output_entry.pack(side="left", fill="x", expand=True, ipady=7)
-        tk.Button(row2, text="Browse", command=self.choose_output,
-                  bg="#f4f6f7", fg=TEXT, relief="solid", bd=1,
-                  font=("Segoe UI",9)).pack(side="left", padx=(8,0), ipady=5)
-        meta = tk.Frame(i2, bg=CARD); meta.pack(fill="x", padx=16, pady=(0,13))
-        tk.Label(meta, text="Circuit / Revision:", bg=CARD, fg=MUTED,
-                 font=("Segoe UI",9)).pack(side="left")
-        self.context_label = tk.Label(meta, text="Not detected", bg=CARD, fg=TEXT,
-                                      font=("Segoe UI",10,"bold"))
-        self.context_label.pack(side="left", padx=(7,0))
-        tk.Button(meta, text="Open Output", command=self.open_output,
-                  bg=CARD, fg=BLUE, relief="flat",
-                  font=("Segoe UI",9)).pack(side="right")
-
-        products_outer, products = self.card(page, "Products to build")
-        products_outer.grid(row=1, column=0, sticky="ew", padx=(12,6), pady=6)
-        checks = tk.Frame(products, bg=CARD); checks.pack(fill="x", padx=16, pady=(0,13))
-        for name in ("TIFF","ECW","LAZ","zLAS","Tile Index"):
-            cb = tk.Checkbutton(checks, text=name, variable=self.product_vars[name],
-                                bg=CARD, fg=TEXT, activebackground=CARD,
-                                selectcolor=CARD, font=("Segoe UI",10),
-                                command=lambda n=name: self._enforce_product_dependencies(n))
-            cb.pack(side="left", padx=(0,24))
-
-        actions_outer, actions = self.card(page)
-        actions_outer.grid(row=1, column=1, sticky="nsew", padx=(6,12), pady=6)
-        action_row = tk.Frame(actions, bg=CARD); action_row.pack(fill="both", expand=True, padx=14, pady=12)
-        self.validate_btn = tk.Button(action_row, text="✓  Validate Setup",
-                                      command=self.validate_setup,
-                                      bg="#ffffff", fg=TEXT, relief="solid", bd=1,
-                                      font=("Segoe UI",10), padx=13, pady=9)
-        self.validate_btn.pack(side="left", padx=(0,10))
-        self.run_btn = tk.Button(action_row, text="▶  Run Build",
-                                 command=lambda: self.start_build(False),
-                                 bg=GREEN, fg="white", activebackground=GREEN_DARK,
-                                 activeforeground="white", relief="flat",
-                                 font=("Segoe UI",10,"bold"), padx=18, pady=10)
-        self.run_btn.pack(side="left", padx=(0,10))
-        self.rerun_btn = tk.Button(action_row, text="↻  Rerun Missing",
-                                   command=lambda: self.start_build(True),
-                                   bg="#ffffff", fg=TEXT, relief="solid", bd=1,
-                                   font=("Segoe UI",10), padx=13, pady=9)
-        self.rerun_btn.pack(side="left", padx=(0,10))
-        self.pause_btn = tk.Button(action_row, text="⏸  Pause",
-                                   command=self.toggle_pause,
-                                   bg="#ffffff", fg=TEXT, relief="solid", bd=1,
-                                   font=("Segoe UI",10), padx=13, pady=9,
-                                   state="disabled")
-        self.pause_btn.pack(side="left", padx=(0,10))
-        self.stop_btn = tk.Button(action_row, text="■  Stop",
-                                  command=self.stop_build,
-                                  bg="#ffffff", fg=RED, relief="solid", bd=1,
-                                  font=("Segoe UI",10), padx=13, pady=9,
-                                  state="disabled")
-        self.stop_btn.pack(side="left")
-
-        exec_outer, exec_inner = self.card(page, "Execution")
-        exec_outer.grid(row=2, column=0, sticky="nsew", padx=(12,6), pady=6)
+        table = tk.Frame(progress, bg=CARD)
+        table.grid(row=1, column=0, sticky="nsew", padx=13, pady=(0, 12))
+        table.grid_columnconfigure(1, weight=2)
+        table.grid_columnconfigure(2, weight=3)
+        for col, label in enumerate(("PROCESS", "PRODUCT / DESCRIPTION", "PROGRESS", "STATUS")):
+            self._dashboard_label(table, label, size=9, bold=True,
+                                  color=MUTED, bg=ROW_BG, anchor="w").grid(
+                row=0, column=col, sticky="ew", ipady=10, padx=1)
         self.exec_rows = {}
-        for product in ("TIFF","ECW","LAZ","zLAS","Tile Index"):
-            r = tk.Frame(exec_inner, bg=CARD)
-            r.pack(fill="x", padx=16, pady=5)
-            tk.Label(r, text=product, width=12, anchor="w",
-                     bg=CARD, fg=TEXT, font=("Segoe UI",10,"bold")).pack(side="left")
-            pb = ttk.Progressbar(r, maximum=100, value=0, length=270)
-            pb.pack(side="left", fill="x", expand=True, padx=(6,10))
-            count = tk.Label(r, text="0 / 0", width=9, bg=CARD, fg=TEXT, font=("Segoe UI",9))
-            count.pack(side="left")
-            st = self.badge(r, "Not checked", "muted"); st.pack(side="left", padx=(6,0))
-            self.exec_rows[product] = (pb,count,st)
+        self.product_checks = {}
+        descriptions = {
+            "TIFF": "GeoTIFF · RGBI masked",
+            "ECW": "Compressed imagery",
+            "LAZ": "Point cloud",
+            "zLAS": "Compressed point cloud",
+            "Tile Index": "Shapefile index",
+        }
+        for i, product in enumerate(("TIFF", "ECW", "LAZ", "zLAS", "Tile Index"), start=1):
+            row_bg = CARD if i % 2 else ROW_BG
+            select = tk.Frame(table, bg=row_bg)
+            select.grid(row=i, column=0, sticky="nsew", padx=1, pady=1)
+            cb = tk.Checkbutton(
+                select, variable=self.product_vars[product],
+                command=lambda n=product: self._enforce_product_dependencies(n),
+                bg=row_bg, fg=TEXT, activebackground=row_bg,
+                activeforeground=TEXT, selectcolor=NAV_2, bd=0,
+                highlightthickness=0, cursor="hand2",
+            )
+            cb.pack(side="left", padx=7, pady=10)
+            self.product_checks[product] = cb
+            name_box = tk.Frame(table, bg=row_bg)
+            name_box.grid(row=i, column=1, sticky="nsew", padx=1, pady=1)
+            self._dashboard_label(name_box, product, size=10, bold=True,
+                                  bg=row_bg).pack(anchor="w", padx=8, pady=(5, 0))
+            self._dashboard_label(name_box, descriptions[product], size=9,
+                                  color=MUTED, bg=row_bg).pack(anchor="w", padx=8, pady=(0, 5))
+            prog_box = tk.Frame(table, bg=row_bg)
+            prog_box.grid(row=i, column=2, sticky="nsew", padx=1, pady=1)
+            pb = ttk.Progressbar(prog_box, maximum=100, value=0, length=110)
+            pb.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=13)
+            count = self._dashboard_label(prog_box, "0 / 0", size=9, bg=row_bg,
+                                          width=8, anchor="e")
+            count.pack(side="right", padx=(0, 5))
+            status_box = tk.Frame(table, bg=row_bg)
+            status_box.grid(row=i, column=3, sticky="nsew", padx=1, pady=1)
+            status = self.badge(status_box, "Not started", "muted")
+            status.pack(side="left", padx=7, pady=12)
+            self.exec_rows[product] = (pb, count, status)
 
-        details_outer, details_inner = self.card(page, "Build Details")
-        details_outer.grid(row=2, column=1, sticky="nsew", padx=(6,12), pady=6)
-
+        # Keep the established build callbacks and selected-product dependencies.
+        actions_outer, actions = self.card(page, "Build Controls")
+        actions_outer.grid(row=2, column=1, sticky="nsew", padx=(6, 12), pady=6)
+        actions.grid_columnconfigure(0, weight=1)
+        actions.grid_columnconfigure(1, weight=1)
+        self.run_btn = self._dashboard_button(
+            actions, "▶  Run Build", lambda: self.start_build(False), primary=True)
+        self.run_btn.grid(row=0, column=0, sticky="ew", padx=(14, 5), pady=(4, 7))
+        self.rerun_btn = self._dashboard_button(
+            actions, "↻  Rerun Missing", lambda: self.start_build(True))
+        self.rerun_btn.grid(row=0, column=1, sticky="ew", padx=(5, 14), pady=(4, 7))
+        self.pause_btn = self._dashboard_button(actions, "⏸  Pause", self.toggle_pause)
+        self.pause_btn.configure(state="disabled")
+        self.pause_btn.grid(row=1, column=0, sticky="ew", padx=(14, 5), pady=(0, 7))
+        self.stop_btn = self._dashboard_button(actions, "■  Stop", self.stop_build)
+        self.stop_btn.configure(state="disabled")
+        self.stop_btn.grid(row=1, column=1, sticky="ew", padx=(5, 14), pady=(0, 7))
+        self.validate_btn = self._dashboard_button(actions, "✓  Validate Setup", self.validate_setup)
+        self.validate_btn.grid(row=2, column=0, columnspan=2, sticky="ew",
+                               padx=14, pady=(0, 12))
+        tk.Frame(actions, bg=BORDER, height=1).grid(
+            row=3, column=0, columnspan=2, sticky="ew", padx=14)
+        details = tk.Frame(actions, bg=CARD)
+        details.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=14, pady=(8, 6))
+        details.grid_columnconfigure(1, weight=1)
         self.detail_values = {}
-        details_grid = tk.Frame(details_inner, bg=CARD)
-        details_grid.pack(fill="both", expand=True, padx=16, pady=(0,14))
-
-        detail_rows = [
+        detail_rows = (
             ("Mode", "mode"),
             ("Selected products", "selected"),
             ("Segments", "segments"),
@@ -448,40 +502,60 @@ class RetilerApp(tk.Tk):
             ("Parallel workers", "workers"),
             ("Current stage", "stage"),
             ("Elapsed", "elapsed"),
-        ]
-        for row_idx, (label, key) in enumerate(detail_rows):
-            tk.Label(
-                details_grid, text=label, bg=CARD, fg=MUTED,
-                font=("Segoe UI",9), anchor="w"
-            ).grid(row=row_idx, column=0, sticky="nw", pady=4, padx=(0,14))
-
-            value = tk.Label(
-                details_grid, text="-", bg=CARD, fg=TEXT,
-                font=("Segoe UI",9,"bold" if key in ("mode","stage") else "normal"),
-                anchor="w", justify="left", wraplength=360
-            )
-            value.grid(row=row_idx, column=1, sticky="nw", pady=4)
+        )
+        for i, (label, key) in enumerate(detail_rows):
+            self._dashboard_label(details, label, size=9, color=MUTED).grid(
+                row=i, column=0, sticky="w", pady=5)
+            value = self._dashboard_label(details, "—", size=9, bold=key in ("mode", "stage"),
+                                          anchor="w", justify="left", wraplength=250)
+            value.grid(row=i, column=1, sticky="w", padx=(10, 0), pady=5)
             self.detail_values[key] = value
 
-        details_grid.grid_columnconfigure(1, weight=1)
-
-        log_outer, log_inner = self.card(page, "Log")
-        log_outer.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=12, pady=(6,12))
-        top_log = tk.Frame(log_inner, bg=CARD); top_log.pack(fill="x", padx=12, pady=(0,6))
-        tk.Button(top_log, text="Open QA Folder", command=self.open_qa_folder,
-                  relief="solid", bd=1, bg="#fff", fg=TEXT).pack(side="right", padx=(5,0))
-        tk.Button(top_log, text="Clear", command=self.clear_log,
-                  relief="solid", bd=1, bg="#fff", fg=TEXT).pack(side="right")
-
-        self.log_text = tk.Text(log_inner, height=11, bg=LOG_BG, fg=LOG_TEXT,
-                                insertbackground="white", relief="flat",
-                                font=("Consolas",9), padx=10, pady=8, wrap="none")
-        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0,12))
-        self.log_text.tag_configure("INFO", foreground="#7fe188")
-        self.log_text.tag_configure("WARN", foreground="#ffd36a")
-        self.log_text.tag_configure("ERROR", foreground="#ff7777")
+        # Compact by default; details remain available on demand.
+        log_outer, log_panel = self.card(page)
+        log_outer.grid(row=3, column=0, columnspan=2, sticky="nsew",
+                       padx=12, pady=(6, 12))
+        log_head = tk.Frame(log_panel, bg=CARD)
+        log_head.pack(fill="x", padx=13, pady=(10, 7))
+        self._dashboard_label(log_head, "Activity Log", size=11, bold=True).pack(side="left")
+        self._dashboard_button(log_head, "Show Details ▼", self.toggle_log_details).pack(side="right")
+        self._dashboard_button(log_head, "Open QA Folder", self.open_qa_folder).pack(side="right", padx=(0, 7))
+        self._dashboard_button(log_head, "Clear", self.clear_log).pack(side="right", padx=(0, 7))
+        self.log_text = tk.Text(log_panel, height=4, bg=LOG_BG, fg=LOG_TEXT,
+                                insertbackground=TEXT, relief="flat",
+                                font=("Consolas", 9), padx=10, pady=7, wrap="none")
+        self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.log_text.tag_configure("INFO", foreground="#82d7a0")
+        self.log_text.tag_configure("WARN", foreground="#ffe29c")
+        self.log_text.tag_configure("ERROR", foreground="#ff9292")
         self.log_text.configure(state="disabled")
+        self._log_expanded = False
+        self._sync_product_selection()
         return page
+
+    def toggle_log_details(self):
+        self._log_expanded = not self._log_expanded
+        self.log_text.configure(height=12 if self._log_expanded else 4)
+
+    def set_all_products(self, selected):
+        if self.running:
+            return
+        for value in self.product_vars.values():
+            value.set(bool(selected))
+        self._sync_product_selection()
+
+    def _sync_product_selection(self):
+        selected = len(self.selected_products())
+        if hasattr(self, "selected_count_label"):
+            self.selected_count_label.configure(
+                text=f"{selected} of {len(self.product_vars)} products selected")
+        if hasattr(self, "summary_values"):
+            self.summary_values["products"].configure(text=str(selected))
+        if hasattr(self, "run_btn") and not self.running:
+            state = "normal" if selected else "disabled"
+            self.run_btn.configure(state=state)
+            self.rerun_btn.configure(state=state)
+        self._refresh_build_details()
 
     def _enforce_product_dependencies(self, changed):
         if changed == "ECW" and self.product_vars["ECW"].get():
@@ -492,11 +566,12 @@ class RetilerApp(tk.Tk):
             self.product_vars["LAZ"].set(True)
         if changed == "LAZ" and not self.product_vars["LAZ"].get():
             self.product_vars["zLAS"].set(False)
+        self._sync_product_selection()
 
     # ---------- Mapping page ----------
     def _build_mapping_page(self):
         page = tk.Frame(self.content_wrap, bg=BG)
-        title = tk.Label(page, text="Input & Mapping", bg=BG, fg=TEXT, font=("Segoe UI",18,"bold"))
+        title = tk.Label(page, text="Data Sources", bg=BG, fg=TEXT, font=("Segoe UI",18,"bold"))
         title.pack(anchor="w", padx=18, pady=(18,10))
         outer, inner = self.card(page, "Current source mapping")
         outer.pack(fill="x", padx=18, pady=8)
@@ -537,7 +612,7 @@ class RetilerApp(tk.Tk):
     def _build_qa_page(self):
         page = tk.Frame(self.content_wrap, bg=BG)
         top = tk.Frame(page, bg=BG); top.pack(fill="x", padx=18, pady=(18,10))
-        tk.Label(top, text="QA & Logs", bg=BG, fg=TEXT, font=("Segoe UI",18,"bold")).pack(side="left")
+        tk.Label(top, text="QA & Reports", bg=BG, fg=TEXT, font=("Segoe UI",18,"bold")).pack(side="left")
         tk.Button(top, text="Open QA Folder", command=self.open_qa_folder, bg="#fff", relief="solid", bd=1).pack(side="right", padx=(6,0))
         tk.Button(top, text="Refresh", command=self.refresh_qa_tree, bg="#fff", relief="solid", bd=1).pack(side="right")
         outer, inner = self.card(page, "QA files for current circuit / revision")
@@ -646,6 +721,13 @@ class RetilerApp(tk.Tk):
             self.log(f"Context detection: {exc}", "WARN")
 
         self._count_source_files()
+        if hasattr(self, "summary_values"):
+            self.summary_values["project"].configure(
+                text=f"{self.context[0]} / {self.context[1]}" if self.context else "Awaiting input")
+            self.summary_values["sources"].configure(
+                text=f"{self.source_tiff_count} + {self.source_lidar_count}")
+            self.summary_values["segments"].configure(
+                text=str(len(self.blocks)) if self.blocks else "—")
         self.refresh_product_status()
 
     def selected_products(self):
@@ -803,6 +885,8 @@ class RetilerApp(tk.Tk):
                     return
 
         self.running = True
+        for check in self.product_checks.values():
+            check.configure(state="disabled")
         self.paused = False
         self.stop_requested = False
         self.suspended_pids = []
@@ -1150,6 +1234,9 @@ class RetilerApp(tk.Tk):
         self.stop_requested = False
         self.run_btn.configure(state="normal")
         self.rerun_btn.configure(state="normal")
+        for check in self.product_checks.values():
+            check.configure(state="normal")
+        self._sync_product_selection()
         self.pause_btn.configure(state="disabled", text="⏸  Pause")
         self.stop_btn.configure(state="disabled")
         self.status_text.configure(text="Stopped" if stopped else ("Ready" if ok else "Build failed"))
