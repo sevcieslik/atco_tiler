@@ -118,6 +118,9 @@ class OrthoMaskTests(unittest.TestCase):
                                count=4, dtype="uint8", crs="EPSG:3857",
                                transform=from_origin(0, 16, 1, 1)) as dst:
                 dst.write(data)
+                # Do not let GDAL infer band 4 as an alpha channel.
+                dst.colorinterp = (ColorInterp.red, ColorInterp.green,
+                                   ColorInterp.blue, ColorInterp.undefined)
             with rasterio.open(src) as ds:
                 self.assertTrue(np.all(ds.dataset_mask() == 255))
             out = root / "out.tif"
