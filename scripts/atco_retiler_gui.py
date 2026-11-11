@@ -33,8 +33,8 @@ APP_VERSION = "1.07"
 NAV = "#0e1a26"
 NAV_2 = "#0b1620"
 BG = "#102132"
-CARD = "#1b3042"
-BORDER = "#3c5769"
+CARD = "#1c3144"
+BORDER = "#486578"
 TEXT = "#edf5fa"
 MUTED = "#a8bdcb"
 GREEN = "#27a43e"
@@ -48,7 +48,7 @@ AMBER = "#f0ba54"
 AMBER_SOFT = "#4a4031"
 LOG_BG = "#0c1b29"
 LOG_TEXT = "#dce9f3"
-ROW_BG = "#22384c"
+ROW_BG = "#263f54"
 
 
 def human_path(p):
@@ -355,10 +355,27 @@ class RetilerApp(tk.Tk):
         )
 
     def _build_build_page(self):
-        page = tk.Frame(self.content_wrap, bg=BG)
+        # Canvas viewport prevents lower products from being clipped on
+        # Windows with display scaling or shorter screen heights.
+        viewport = tk.Frame(self.content_wrap, bg=BG)
+        canvas = tk.Canvas(viewport, bg=BG, highlightthickness=0, bd=0)
+        scrollbar = ttk.Scrollbar(viewport, orient="vertical", command=canvas.yview)
+        canvas.configure(yscrollcommand=scrollbar.set)
+        scrollbar.pack(side="right", fill="y")
+        canvas.pack(side="left", fill="both", expand=True)
+        page = tk.Frame(canvas, bg=BG)
+        window_id = canvas.create_window((0, 0), window=page, anchor="nw")
+        page.bind("<Configure>", lambda _event: canvas.configure(
+            scrollregion=canvas.bbox("all")))
+        canvas.bind("<Configure>", lambda event: canvas.itemconfigure(
+            window_id, width=event.width))
+        canvas.bind("<Enter>", lambda _event: canvas.bind_all(
+            "<MouseWheel>", lambda wheel: canvas.yview_scroll(
+                int(-wheel.delta / 120), "units")))
+        canvas.bind("<Leave>", lambda _event: canvas.unbind_all("<MouseWheel>"))
         page.grid_columnconfigure(0, weight=7)
         page.grid_columnconfigure(1, weight=4)
-        page.grid_rowconfigure(2, weight=1)
+        page.grid_rowconfigure(2, weight=0)
         page.grid_rowconfigure(3, weight=0)
 
         # Live context tiles.
@@ -368,21 +385,21 @@ class RetilerApp(tk.Tk):
             metrics.grid_columnconfigure(i, weight=1, uniform="metric")
         self.summary_values = {}
         summaries = (
-            ("project", "ACTIVE PROJECT", "Awaiting input", "Circuit / AOI revision"),
-            ("sources", "INPUT DATA", "—", "Ortho TIFFs + LiDAR files"),
-            ("products", "SELECTED PRODUCTS", "5", "TIFF · ECW · LAZ · zLAS · Index"),
-            ("segments", "SEGMENTS", "—", "Tiles to process"),
+            ("project", "▤   ACTIVE PROJECT", "Awaiting input", "Circuit / AOI revision"),
+            ("sources", "▥   INPUT DATA", "—", "Ortho TIFFs + LiDAR files"),
+            ("products", "◈   SELECTED PRODUCTS", "5", "TIFF · ECW · LAZ · zLAS · Index"),
+            ("segments", "▦   SEGMENTS", "—", "Tiles to process"),
         )
         for i, (key, heading, value, hint) in enumerate(summaries):
             outer, inner = self.card(metrics)
             outer.grid(row=0, column=i, sticky="nsew", padx=(0 if i == 0 else 5, 0 if i == 3 else 5))
-            self._dashboard_label(inner, heading, size=9, color=MUTED).pack(
-                anchor="w", padx=16, pady=(11, 2))
-            label = self._dashboard_label(inner, value, size=18, bold=True)
+            self._dashboard_label(inner, heading, size=9, color="#a9c9df").pack(
+                anchor="w", padx=16, pady=(8, 1))
+            label = self._dashboard_label(inner, value, size=20, bold=True)
             label.pack(anchor="w", padx=16)
             self.summary_values[key] = label
             self._dashboard_label(inner, hint, size=9, color=MUTED).pack(
-                anchor="w", padx=16, pady=(1, 11))
+                anchor="w", padx=16, pady=(1, 8))
 
         # Compact input/output setup shared with the Data Sources page.
         setup_outer, setup = self.card(page, "Project Setup")
@@ -406,7 +423,7 @@ class RetilerApp(tk.Tk):
         self.context_label.grid(row=0, column=3, sticky="e", padx=(6, 14))
         self.mapping_chip_frame = tk.Frame(setup, bg=CARD)
         self.mapping_chip_frame.grid(row=2, column=0, columnspan=4,
-                                     sticky="w", padx=16, pady=(4, 10))
+                                     sticky="w", padx=16, pady=(2, 7))
 
         # Progress table: checkboxes are the authoritative product selectors.
         progress_outer, progress = self.card(page, "Products & Progress")
@@ -450,25 +467,25 @@ class RetilerApp(tk.Tk):
                 activeforeground=TEXT, selectcolor=NAV_2, bd=0,
                 highlightthickness=0, cursor="hand2",
             )
-            cb.pack(side="left", padx=7, pady=10)
+            cb.pack(side="left", padx=7, pady=7)
             self.product_checks[product] = cb
             name_box = tk.Frame(table, bg=row_bg)
             name_box.grid(row=i, column=1, sticky="nsew", padx=1, pady=1)
             self._dashboard_label(name_box, product, size=10, bold=True,
-                                  bg=row_bg).pack(anchor="w", padx=8, pady=(5, 0))
+                                  bg=row_bg).pack(anchor="w", padx=8, pady=(3, 0))
             self._dashboard_label(name_box, descriptions[product], size=9,
-                                  color=MUTED, bg=row_bg).pack(anchor="w", padx=8, pady=(0, 5))
+                                  color=MUTED, bg=row_bg).pack(anchor="w", padx=8, pady=(0, 3))
             prog_box = tk.Frame(table, bg=row_bg)
             prog_box.grid(row=i, column=2, sticky="nsew", padx=1, pady=1)
             pb = ttk.Progressbar(prog_box, maximum=100, value=0, length=110)
-            pb.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=13)
+            pb.pack(side="left", fill="x", expand=True, padx=(6, 8), pady=10)
             count = self._dashboard_label(prog_box, "0 / 0", size=9, bg=row_bg,
                                           width=8, anchor="e")
             count.pack(side="right", padx=(0, 5))
             status_box = tk.Frame(table, bg=row_bg)
             status_box.grid(row=i, column=3, sticky="nsew", padx=1, pady=1)
             status = self.badge(status_box, "Not started", "muted")
-            status.pack(side="left", padx=7, pady=12)
+            status.pack(side="left", padx=7, pady=9)
             self.exec_rows[product] = (pb, count, status)
 
         # Keep the established build callbacks and selected-product dependencies.
@@ -509,10 +526,10 @@ class RetilerApp(tk.Tk):
         )
         for i, (label, key) in enumerate(detail_rows):
             self._dashboard_label(details, label, size=9, color=MUTED).grid(
-                row=i, column=0, sticky="w", pady=5)
+                row=i, column=0, sticky="w", pady=3)
             value = self._dashboard_label(details, "—", size=9, bold=key in ("mode", "stage"),
                                           anchor="w", justify="left", wraplength=250)
-            value.grid(row=i, column=1, sticky="w", padx=(10, 0), pady=5)
+            value.grid(row=i, column=1, sticky="w", padx=(10, 0), pady=3)
             self.detail_values[key] = value
 
         # Compact by default; details remain available on demand.
@@ -521,11 +538,11 @@ class RetilerApp(tk.Tk):
                        padx=12, pady=(6, 12))
         log_head = tk.Frame(log_panel, bg=CARD)
         log_head.pack(fill="x", padx=13, pady=(10, 7))
-        self._dashboard_label(log_head, "Activity Log", size=11, bold=True).pack(side="left")
+        self._dashboard_label(log_head, "▸  Activity Log", size=11, bold=True).pack(side="left")
         self._dashboard_button(log_head, "Show Details ▼", self.toggle_log_details).pack(side="right")
         self._dashboard_button(log_head, "Open QA Folder", self.open_qa_folder).pack(side="right", padx=(0, 7))
         self._dashboard_button(log_head, "Clear", self.clear_log).pack(side="right", padx=(0, 7))
-        self.log_text = tk.Text(log_panel, height=4, bg=LOG_BG, fg=LOG_TEXT,
+        self.log_text = tk.Text(log_panel, height=3, bg=LOG_BG, fg=LOG_TEXT,
                                 insertbackground=TEXT, relief="flat",
                                 font=("Consolas", 9), padx=10, pady=7, wrap="none")
         self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -535,11 +552,11 @@ class RetilerApp(tk.Tk):
         self.log_text.configure(state="disabled")
         self._log_expanded = False
         self._sync_product_selection()
-        return page
+        return viewport
 
     def toggle_log_details(self):
         self._log_expanded = not self._log_expanded
-        self.log_text.configure(height=12 if self._log_expanded else 4)
+        self.log_text.configure(height=11 if self._log_expanded else 3)
 
     def set_all_products(self, selected):
         if self.running:
@@ -1188,8 +1205,12 @@ class RetilerApp(tk.Tk):
             "run": (BLUE_SOFT, BLUE),
             "bad": (RED_SOFT, RED),
             "warn": (AMBER_SOFT, "#a76c00"),
-            "muted": ("#eef1f3", MUTED)
+            "muted": (ROW_BG, MUTED)
         }
+        colors["ok"] = (GREEN_SOFT, "#8fe4a2")
+        colors["run"] = (BLUE_SOFT, "#a2d5f7")
+        colors["bad"] = (RED_SOFT, "#ffc5c5")
+        colors["warn"] = (AMBER_SOFT, "#ffe0a1")
         bg,fg = colors[kind]
         widget.configure(text=text,bg=bg,fg=fg)
 
