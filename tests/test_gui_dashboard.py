@@ -25,6 +25,9 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertIn("Build", self.app.pages)
         self.assertIn("Data Sources", self.app.pages)
         self.assertIn("QA & Reports", self.app.pages)
+        self.assertIn("How to Start", self.app.pages)
+        self.assertTrue(self.app.commit_badge["text"].startswith("Commit"))
+        self.assertEqual(str(self.app.run_btn["state"]), "normal")
 
     def test_select_all_and_dependencies(self):
         self.app.set_all_products(False)
@@ -45,12 +48,26 @@ class DashboardSmokeTests(unittest.TestCase):
 
     def test_log_can_expand_without_losing_messages(self):
         self.app.log("UI smoke test", "INFO")
-        self.assertEqual(int(self.app.log_text["height"]), 3)
+        self.assertFalse(self.app.log_text.winfo_manager())
         self.app.toggle_log_details()
-        self.assertEqual(int(self.app.log_text["height"]), 11)
+        self.assertEqual(self.app.log_text.winfo_manager(), "pack")
         self.assertIn("UI smoke test", self.app.log_text.get("1.0", "end"))
+        self.assertEqual(self.app.log_toggle_btn["text"], "Hide Details ▲")
         self.app.toggle_log_details()
-        self.assertEqual(int(self.app.log_text["height"]), 3)
+        self.assertFalse(self.app.log_text.winfo_manager())
+        self.assertEqual(self.app.log_toggle_btn["text"], "Show Details ▼")
+
+    def test_round_buttons_keep_processing_interface(self):
+        self.app.pause_btn.configure(state="normal", text="▶  Resume")
+        self.assertEqual(self.app.pause_btn["state"], "normal")
+        self.assertEqual(self.app.pause_btn["text"], "▶  Resume")
+        self.app.pause_btn.configure(state="disabled")
+        self.assertEqual(self.app.pause_btn["state"], "disabled")
+
+    def test_readiness_lights_are_vertical(self):
+        chips = self.app.mapping_chip_frame.winfo_children()
+        self.assertEqual(len(chips), 3)
+        self.assertTrue(all(c.pack_info()["side"] == "top" for c in chips))
 
 
 if __name__ == "__main__":
