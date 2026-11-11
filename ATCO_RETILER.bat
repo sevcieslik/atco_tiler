@@ -34,9 +34,13 @@ if errorlevel 1 (
   exit /b 1
 )
 
-if exist "%ENV_DIR%\pythonw.exe" (
-  start "" "%ENV_DIR%\pythonw.exe" "%SCRIPTS%\atco_retiler_gui.py"
-) else (
-  start "" "%ENV_DIR%\python.exe" "%SCRIPTS%\atco_retiler_gui.py"
+rem Keep Python attached to this console during UAT so GUI startup errors
+rem are visible rather than silently swallowed by pythonw.exe.
+"%ENV_DIR%\python.exe" "%SCRIPTS%\atco_retiler_gui.py"
+if errorlevel 1 (
+  echo.
+  echo ERROR: ATCO Retiler GUI exited with an error. See traceback above.
+  pause
+  exit /b 1
 )
 exit /b 0
