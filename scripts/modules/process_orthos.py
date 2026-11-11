@@ -357,8 +357,11 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
             target_aligned_pixels=False,
         )
         if np.ma.isMaskedArray(arr):
-            source_valid = ~np.all(np.ma.getmaskarray(arr), axis=0)
-            data = np.ma.filled(arr, 255)
+            # A pixel is usable only when ALL four data bands are valid.
+            # Previously a single valid band was enough, which promoted
+            # partially masked edge pixels into conspicuous light fringes.
+            source_valid = ~np.any(np.ma.getmaskarray(arr), axis=0)
+            data = np.ma.filled(arr, 0)
         else:
             source_valid = np.ones(arr.shape[1:], dtype=bool)
             data = arr.copy()
@@ -368,38 +371,44 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
         total_pixels = int(valid.size)
         coverage_pct = (100.0 * valid_pixels / total_pixels) if total_pixels else 0.0
 
-        # ArcGIS-safe 4-band RGBI NoData rule validated against Luke's GDAL
-        # test: only 255,255,255,255 is background.  Because GeoTIFF stores a
-        # single NoData value per band, make sure valid pixels never contain 255
-        # in any individual band (GDAL warp does the same preservation step by
-        # nudging those rare valid 255 values to 254). Band 4 remains NIR.
-        valid_255 = (data == 255) & valid[None, :, :]
-        if np.any(valid_255):
-            data[valid_255] = 254
-        data[:, ~valid] = 255
+        # Do not use a per-band NoData=255 marker for RGBI imagery: an
+        # otherwise valid pixel may legitimately contain 255 in any band.
+        # Carry one explicit dataset validity mask instead and preserve every
+        # valid source sample byte-for-byte (including 255).
+        data[:, ~valid] = 0
 
         profile = datasets[0].profile.copy()
         for key in ('blockxsize','blockysize','photometric','interleave','nodata'):
             profile.pop(key, None)
         profile.update(
             driver='GTiff', height=data.shape[1], width=data.shape[2], count=4,
-            dtype=data.dtype, transform=affine, crs=crs, nodata=255,
+            dtype=data.dtype, transform=affine, crs=crs, nodata=None,
             tiled=True, blockxsize=512, blockysize=512, compress='lzw',
             photometric='RGB', BIGTIFF='IF_SAFER'
         )
         final_tmp = out_tif.with_suffix('.nodata.tmp.tif')
         if final_tmp.exists():
             final_tmp.unlink()
-        with rasterio.open(final_tmp, 'w', **profile) as dst:
-            dst.write(data)
-            dst.colorinterp = (
-                ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
-            )
-            dst.update_tags(
-                ATCO_BLOCKNUM=blocknum,
-                ATCO_BACKGROUND_RULE='Only RGBI 255,255,255,255 is NoData; valid 255 values preserved as 254',
-                ATCO_BAND4='NIR',
-            )
+        # GDAL_TIFF_INTERNAL_MASK keeps the 1-bit mask inside the deliverable,
+        # not in an easily forgotten .msk sidecar.
+        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+            with rasterio.open(final_tmp, 'w', **profile) as dst:
+                dst.write(data)
+                dst.colorinterp = (
+                    ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
+                )
+                dst.write_mask((valid.astype(np.uint8) * 255))
+
+        # Read back the delivered pixels/mask before replacing a previous TIFF.
+        with rasterio.open(final_tmp) as check:
+            if check.nodata is not None:
+                raise RuntimeError(f'Unexpected NoData value in {final_tmp}')
+            if not np.array_equal(check.dataset_mask() > 0, valid):
+                raise RuntimeError(f'Internal TIFF mask mismatch for {blocknum}')
+            if not np.array_equal(check.read()[:, valid], data[:, valid]):
+                raise RuntimeError(f'Valid TIFF sample values changed for {blocknum}')
+        if final_tmp.with_suffix(final_tmp.suffix + '.msk').exists():
+            raise RuntimeError(f'Internal TIFF mask was written as a sidecar: {final_tmp}')
 
         if out_tif.exists():
             out_tif.unlink()
@@ -453,11 +462,10 @@ def gms_quote(path: Path):
 def build_gm_rgba_input(src_tif: Path, out_tif: Path):
     """Create a Global Mapper-only RGBA GeoTIFF.
 
-    The client TIFF remains RGBI (when source has NIR) and carries the unified
-    255,255,255,255 NoData rule. ECW must not see NIR as its 4th band because
-    Global Mapper/ECW can interpret band 4 as alpha. This intermediate copies RGB
-    values byte-for-byte and converts the source dataset validity mask (derived from
-    NoData) to a real 0/255 alpha band.
+    The client TIFF remains RGBI and carries an internal dataset mask.
+    ECW must not see NIR as its 4th band because Global Mapper can interpret
+    band 4 as alpha. This intermediate copies RGB byte-for-byte and converts
+    the TIFF's explicit validity mask into a real 0/255 alpha band.
     """
     out_tif.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_tif.with_suffix('.tmp.tif')
@@ -483,11 +491,15 @@ def build_gm_rgba_input(src_tif: Path, out_tif: Path):
                 alpha = src.dataset_mask(window=window)
                 dst.write(rgb, indexes=[1, 2, 3], window=window)
                 dst.write(alpha.astype(np.uint8), indexes=4, window=window)
-            dst.update_tags(
-                ATCO_ECW_INTERMEDIATE='RGBA',
-                ATCO_SOURCE_TIFF=str(src_tif),
-                ATCO_ALPHA_SOURCE='source_dataset_mask_from_nodata'
-            )
+            # This is a temporary QA-only file; ensure alpha was actually
+            # produced before Global Mapper receives the raster.
+        with rasterio.open(tmp) as check:
+            if check.colorinterp[3] != ColorInterp.alpha:
+                raise RuntimeError(f'Global Mapper TIFF has no alpha band: {tmp}')
+            with rasterio.open(src_tif) as src:
+                for _, window in src.block_windows(1):
+                    if not np.array_equal(check.read(4, window=window), src.dataset_mask(window=window)):
+                        raise RuntimeError(f'Global Mapper alpha differs from source mask: {tmp}')
     if out_tif.exists():
         out_tif.unlink()
     tmp.replace(out_tif)
@@ -559,15 +571,16 @@ def make_gm_script(gm_inputs, ecw_dir: Path, gms_path: Path, compression=10):
     results = []
     for final_tif, rgba_tif in gm_inputs:
         ecw = ecw_dir / (final_tif.stem + '.ecw')
-        # Be explicit: raw RGB display, no contrast/color scaling. Band 4 in this
-        # dedicated intermediate is alpha, never the client's NIR band.
+        # Import all RGBA bands. BAND_SETUP="0,1,2" selected only RGB and
+        # risked dropping the explicit alpha channel before ECW export.
+        # The intermediate already has RGB + alpha; NIR is not present.
         lines.append(
-            f'IMPORT FILENAME="{gms_quote(rgba_tif)}" TYPE=AUTO BAND_SETUP="0,1,2" '
+            f'IMPORT FILENAME="{gms_quote(rgba_tif)}" TYPE=AUTO '
             f'CONTRAST_MODE=NONE COLOR_SCALE="0,0,0"'
         )
         lines.append(
             f'EXPORT_RASTER FILENAME="{gms_quote(ecw)}" TYPE=ECW '
-            f'TARGET_COMPRESSION={int(compression)} BG_TRANSPARENT=YES USE_BAND4_AS_ALPHA=YES '
+            f'TARGET_COMPRESSION={int(compression)} BG_TRANSPARENT=YES '
             f'ECW_FORMAT_VERSION=3 GEN_PRJ_FILE=YES OVERWRITE_EXISTING=YES '
             f'LAYER_BOUNDS="{gms_quote(rgba_tif)}" USE_EXACT_BOUNDS=YES'
         )
@@ -918,8 +931,8 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
         'ecw_bands': 3 if make_ecw else None, 'pixel_size': list(res),
         'ortho_processing_footprint_count': len(ortho_index), 'footprint_gap_m2': gap,
         'footprint_overlap_m2': overlap_m2, 'footprint_overlap_pairs': overlap_pairs,
-        'tiff_background': '4-band RGBI: only 255,255,255,255 is NoData (GDAL UNIFIED_SRC_NODATA=YES)',
-        'ecw_background': 'RGBA intermediate alpha -> Global Mapper USE_BAND4_AS_ALPHA=YES, ECW v3' if make_ecw else None,
+        'tiff_background': '4-band RGBI with an internal TIFF validity mask; valid 255 preserved; nodata unset',
+        'ecw_background': 'RGBA intermediate alpha -> Global Mapper BG_TRANSPARENT=YES, ECW v3' if make_ecw else None,
         'ecw_rgb_source': 'dedicated 8-bit RGB copy of TIFF bands 1/2/3; NIR excluded from GM input' if make_ecw else None,
         'parallel_workers_config': configured_parallel_workers(), 'output_root': str(base),
     }
