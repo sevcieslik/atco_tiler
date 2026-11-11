@@ -1,11 +1,11 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATCO Retiler v1.06 - FAQ, Troubleshooting & QA</title>
+<title>ATCO Retiler v1.07 - FAQ, Troubleshooting & QA</title>
 <style>
 :root{--nav:#18232d;--ink:#17212b;--muted:#64717c;--line:#d5dde3;--green:#2e9638;--blue:#1769d2;--red:#b53b3b;--amber:#9b6900}
 *{box-sizing:border-box}body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);background:#eef2f5;line-height:1.55}header{background:var(--nav);color:#fff;padding:28px 36px}header h1{margin:0;font-size:28px}header p{margin:6px 0 0;color:#d7e0e6}main{max-width:1180px;margin:22px auto 60px;padding:0 22px}.card{background:#fff;border:1px solid var(--line);border-radius:8px;padding:22px 26px;margin:14px 0}h2{margin:0 0 14px;font-size:20px}h3{margin:22px 0 6px;font-size:16px}code{background:#eef2f5;padding:2px 5px;border-radius:4px}.path{font-family:Consolas,monospace;word-break:break-all}.qa{border-left:4px solid var(--green);background:#f0f8f1;padding:10px 14px}.warn{border-left:4px solid #d79a1b;background:#fff8e8;padding:10px 14px}.bad{border-left:4px solid var(--red);background:#fff0f0;padding:10px 14px}table{width:100%;border-collapse:collapse;margin:10px 0}th,td{padding:9px 10px;text-align:left;vertical-align:top;border-bottom:1px solid #e3e8ec}th{background:#f4f7f9}.small{font-size:13px;color:var(--muted)}
 </style></head><body>
-<header><h1>FAQ / Troubleshooting / QA</h1><p>ATCO Retiler v1.06 operator guide</p></header><main>
+<header><h1>FAQ / Troubleshooting / QA</h1><p>ATCO Retiler v1.07 operator guide</p></header><main>
 
 <section class="card"><h2>Before starting a build</h2>
 <div class="qa"><strong>Run Validate Setup first.</strong> Confirm Central AOI DB, Central Segments, client source GDB, trajectory index, PDAL, EzLAS and Global Mapper show the expected status. Missing Global Mapper blocks ECW only; missing EzLAS blocks zLAS only.</div>
@@ -13,9 +13,9 @@
 <h3>AOI mismatch / outdated AOI</h3><p>Do not bypass the error. The selected AOI must match the current central AOI revision and its approved W-drive segment set. Publish/regenerate central AOI/segments first if the production geometry has legitimately changed.</p></section>
 
 <section class="card"><h2>Imagery troubleshooting</h2>
-<h3>TIFF shows white or black background in ArcGIS Pro</h3><p>Final TIFF should be four-band RGBI with NoData based on the complete <code>255,255,255,255</code> condition. Band 4 must remain NIR, not Alpha.</p>
-<div class="qa">Check ArcGIS Pro at an outside-AOI edge and inspect the four bands. If the TIFF was produced by v1.06, the metadata tag <code>ATCO_BACKGROUND_RULE</code> should describe the unified four-band background rule.</div>
-<h3>Valid bright pixels look clipped</h3><p>Retiler protects valid data by changing rare valid per-band 255 values to 254 before setting 255 as NoData. Do not replace this with a simple per-band 255 filter.</p>
+<h3>TIFF shows white or black background in ArcGIS Pro</h3><p>Final TIFF should be four-band RGBI with an <strong>internal dataset validity mask</strong> and no scalar NoData value. During input merging, only all-four-band 254 or 255 background tuples are treated as invalid. Band 4 remains NIR, not Alpha.</p>
+<div class="qa">Check ArcGIS Pro at an outside-AOI edge and inspect the four bands and mask. Confirm that external pixels are transparent and valid image pixels, including individual band value 255, remain unchanged.</div>
+<h3>Valid bright pixels look clipped</h3><p>Current processing preserves valid 255 values exactly; the internal mask, rather than per-band NoData, indicates which pixels are invalid. Do not apply a simple per-band 255 filter.</p>
 <h3>ECW is pale / washed out</h3><p>ECW must be generated from the dedicated QA RGBA intermediate. The intermediate uses RGB from the TIFF and a real Alpha band from its validity mask. NIR must not be used as ECW band 4.</p>
 <h3>Visible ECW tile seams</h3><p>Compare the ECW with the TIFF at the same location. If TIFF is clean but ECW shows a seam, check the Global Mapper log and the RGBA intermediate. Also test the actual PLS display because ECW is intended primarily for visual use.</p>
 <h3>ECW conversion is slow or incomplete</h3><p>Global Mapper can become unstable with excessive parallel workers. Rerun Missing is preferred after resolving the issue. Review <code>QA\Imagery</code> before deleting valid output.</p></section>
@@ -26,7 +26,7 @@
 <h3>Class 7 appears in delivered LAZ</h3><p>This should not happen. LAZ processing explicitly removes Classification 7. Check the final LAZ, not the source file, and review the LiDAR processing report.</p>
 <h3>Return Number 0 / Synthetic warning</h3><p>Retiler reports this condition but does not change it automatically. Review <code>QA\LiDAR\return0_flag_by_class.csv</code>.</p>
 <div class="warn"><strong>Do not apply a blanket ReturnNumber=0 → Synthetic rule.</strong> ATCO sample analysis found Return 0 points in Class 93 that require interpretation rather than an automatic flag change.</div>
-<h3>EzLAS windows appear</h3><p>v1.06 launches EzLAS hidden and actively hides EzLAS/child windows while conversion is running. If windows still appear, capture a screenshot and note whether it occurs during conversion or verification; the zLAS output itself can still be valid.</p>
+<h3>EzLAS windows appear</h3><p>v1.07 launches EzLAS hidden and actively hides EzLAS/child windows while conversion is running. If windows still appear, capture a screenshot and note whether it occurs during conversion or verification; the zLAS output itself can still be valid.</p>
 <h3>zLAS missing / validation failed</h3><p>Review <code>QA\LiDAR\EzLAS\zlas_validation.csv</code> and the corresponding command/log file. Retiler only accepts a zLAS after EzLAS verification.</p></section>
 
 <section class="card"><h2>Tile Index troubleshooting</h2>
@@ -34,11 +34,11 @@
 <h3>Why are OBJECTID / Shape_Length / Shape_Area not in the SHP?</h3><p>They are GDB-managed geometry fields and are created during later import. The SHP contains the business attributes only.</p>
 <h3>TX fields</h3><p><code>BlockNum, ZONE, YEAR, LINE, NAME, fldate, Flightline</code>.</p>
 <h3>DX fields</h3><p><code>PRJ_NAME, YEAR, ZONE</code>. Historic ArcGIS join/licensing fields are deliberately omitted.</p>
-<h3>Why does a DX filename contain spaces?</h3><p>DX client-facing names follow the entity naming used in the SoW SQLite. Example: <code>UTIKUMA OILFIELD_0001</code>.</p></section>
+<h3>Why does a DX filename contain spaces?</h3><p>DX client-facing names follow the entity naming used in the SoW SQLite. Example: <code>UTIKUMA OILFIELD_2026_Tiles_v1_0001</code>.</p></section>
 
 <section class="card"><h2>Rerun and Stop</h2>
-<h3>Run Build vs Rerun Missing</h3><p><strong>Run Build</strong> is the deliberate overwrite path for selected products. <strong>Rerun Missing</strong> is the normal recovery path after an interruption or dependency failure.</p>
-<h3>Stop</h3><p>Stop terminates the active processor tree and returns the GUI to Ready. Review QA and output before rerunning; valid completed products may already exist.</p>
+<h3>Choosing products in v1.07</h3><p>Use the checkboxes in <strong>Products &amp; Progress</strong>. Select All and Deselect All change the whole selection. ECW selects TIFF; zLAS selects LAZ. The Run Build action is unavailable when no products are selected.</p><h3>Run Build vs Rerun Missing</h3><p><strong>Run Build</strong> is the deliberate overwrite path for selected products. <strong>Rerun Missing</strong> is the normal recovery path after an interruption or dependency failure.</p>
+<h3>Activity Log</h3><p>The log is collapsed by default. Choose <strong>Show Details</strong> to read messages and <strong>Hide Details</strong> to collapse it. Logs remain available through the processing session.</p><h3>Stop</h3><p>Stop terminates the active processor tree and returns the GUI to Ready. Review QA and output before rerunning; valid completed products may already exist.</p>
 <h3>Pause / Resume</h3><p>Pause suspends the processor tree rather than cancelling it. Avoid leaving external applications such as Global Mapper paused for extended periods if the workstation will sleep or disconnect network drives.</p></section>
 
 <section class="card"><h2>Minimum QA checklist before delivery handoff</h2>
@@ -47,9 +47,9 @@
 <tr><td>ECW</td><td>Matches TIFF spatially and visually; no washed-out colour; no obvious seams in PLS; 3-band RGB visual product.</td></tr>
 <tr><td>LAZ</td><td>Correct extent; Class 7 absent; CRS/vertical datum preserved; classification looks plausible; review Return 0 report rather than auto-editing flags.</td></tr>
 <tr><td>zLAS</td><td>EzLAS validation passed; sample opens in ArcGIS Pro; compare against LAZ for extent, point count/classifications and appearance.</td></tr>
-<tr><td>Tile Index</td><td>One singlepart polygon per tile; feature count equals approved segments; names correspond to TIFF/LAZ; TX/DX field schema correct; TX trajectory fields populated where matching data exists.</td></tr></table>
+<tr><td>Tile Index</td><td>One singlepart polygon per tile; feature count equals approved segments; names correspond to the delivered <code>_2026_Tiles_v1_####</code> pattern; TX/DX field schema correct; TX trajectory fields populated where matching data exists.</td></tr></table>
 <div class="qa"><strong>Final principle:</strong> central AOI/segments define geometry; Retiler transforms products to that geometry. Unexpected geometry changes should be investigated upstream, not fixed by editing final products.</div>
 </section>
 
-<p class="small">ATCO Retiler v1.06 · Bugs, improvements and issues: pit@nmgroup.com</p>
+<p class="small">ATCO Retiler v1.07 · Bugs, improvements and issues: pit@nmgroup.com</p>
 </main></body></html>
