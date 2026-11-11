@@ -347,8 +347,8 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
     try:
         for p in chosen:
             datasets.append(rasterio.open(p))
-        # ATCO source ortho backgrounds sometimes use RGBI=(254,254,254,254)
-        # as an unmasked fill value. Reject precisely this four-band tuple
+        # ATCO source ortho backgrounds can use RGBI=(254,254,254,254)
+        # or (255,255,255,255) as unmasked fill values. Reject both tuples
         # *before* mosaicking: otherwise method='first' may select the white
         # fringe and obscure real imagery from an overlapping source.
         #
@@ -365,7 +365,7 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
                 candidate = ~mask
             else:
                 candidate = ~np.any(mask[:4], axis=0)
-            background = np.all(new_data[:4] == 254, axis=0)
+            background = np.all(new_data[:4] == 254, axis=0) | np.all(new_data[:4] == 255, axis=0)
             copy_pixel = (merged_data[4] == 0) & candidate & ~background
             np.copyto(merged_data[:4], new_data[:4], where=copy_pixel[None, :, :])
             merged_data[4][copy_pixel] = 1
