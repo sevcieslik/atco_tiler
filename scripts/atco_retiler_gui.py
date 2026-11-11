@@ -318,7 +318,11 @@ class RetilerApp(tk.Tk):
         if title:
             tk.Label(inner, text=title, bg=CARD, fg=TEXT,
                      font=("Segoe UI", 11, "bold")).pack(anchor="w", padx=16, pady=(12,6))
-        return outer, inner
+        # A dedicated content frame lets each card use either grid or pack
+        # without mixing geometry managers with the packed heading above.
+        body = tk.Frame(inner, bg=CARD)
+        body.pack(fill="both", expand=True)
+        return outer, body
 
     def badge(self, parent, text, kind="ok"):
         colors = {
