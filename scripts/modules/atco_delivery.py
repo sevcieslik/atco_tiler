@@ -5,6 +5,7 @@ from pathlib import Path
 from pyproj import CRS
 
 YEAR = 2026
+TILE_VERSION = "v1"
 TX_ENTITIES = {"7L23", "7L56", "7L65", "9L137", "9L155", "9L32", "9L66"}
 
 
@@ -41,8 +42,14 @@ def tile_sequence(blocknum: str) -> str:
     return raw.zfill(max(4, len(raw)))
 
 
+def delivery_tile_prefix(entity: str) -> str:
+    """Common client naming stem for every tiled product."""
+    return f"{client_entity_name(entity)}_{YEAR}_Tiles_{TILE_VERSION}"
+
+
 def delivery_tile_name(entity: str, blocknum: str) -> str:
-    return f"{client_entity_name(entity)}_{tile_sequence(blocknum)}"
+    """Tiled TIFF/ECW/LAZ/zLAS filename stem, including approved block sequence."""
+    return f"{delivery_tile_prefix(entity)}_{tile_sequence(blocknum)}"
 
 
 def enrich_segments(seg, entity: str):
@@ -68,7 +75,7 @@ def delivery_gdb_path(base: Path, entity: str) -> Path:
 
 def tile_index_shp_path(base: Path, entity: str) -> Path:
     """Intermediate Tile Index written by Retiler before final GDB assembly."""
-    return Path(base) / "Tile_Index" / f"{client_entity_name(entity)}_{YEAR}_Tiles_v1.shp"
+    return Path(base) / "Tile_Index" / f"{delivery_tile_prefix(entity)}.shp"
 
 
 def utm_zone(crs) -> str:
