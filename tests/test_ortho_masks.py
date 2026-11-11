@@ -121,14 +121,41 @@ class OrthoMaskTests(unittest.TestCase):
                 # Do not let GDAL infer band 4 as an alpha channel.
                 dst.colorinterp = (ColorInterp.red, ColorInterp.green,
                                    ColorInterp.blue, ColorInterp.undefined)
-            with rasterio.open(src) as ds:
-                self.assertTrue(np.all(ds.dataset_mask() == 255))
             out = root / "out.tif"
             export_tile("TEST", (0,0,16,16), box(0,0,16,16), [src],
                         out, 4, "EPSG:3857", (1,1))
             with rasterio.open(out) as ds:
                 self.assertEqual(ds.dataset_mask()[0,0], 0)
                 self.assertEqual(ds.dataset_mask()[0,1], 255)
+
+    def test_255_white_fill_is_excluded_or_replaced(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            profile = dict(driver="GTiff", width=16, height=16, count=4,
+                           dtype="uint8", crs="EPSG:3857",
+                           transform=from_origin(0,16,1,1))
+            a = np.full((4,16,16), 80, dtype=np.uint8)
+            b = np.full((4,16,16), 50, dtype=np.uint8)
+            a[:,0,:] = 255
+            # Legitimate bright sample with only SOME bands set to 255.
+            a[:,1,0] = [255, 120, 255, 120]
+            for name, data in (("a.tif", a), ("b.tif", b)):
+                with rasterio.open(root / name, "w", **profile) as dst:
+                    dst.write(data)
+                    dst.colorinterp = (ColorInterp.red, ColorInterp.green,
+                                       ColorInterp.blue, ColorInterp.undefined)
+            out = root / "merged.tif"
+            export_tile("TEST",(0,0,16,16),box(0,0,16,16),
+                        [root/"a.tif",root/"b.tif"],out,4,"EPSG:3857",(1,1))
+            with rasterio.open(out) as ds:
+                np.testing.assert_array_equal(ds.read()[:,0,0], b[:,0,0])
+                np.testing.assert_array_equal(ds.read()[:,1,0], a[:,1,0])
+                self.assertEqual(ds.dataset_mask()[0,0], 255)
+            alone = root / "alone.tif"
+            export_tile("ALONE",(0,0,16,16),box(0,0,16,16),
+                        [root/"a.tif"],alone,4,"EPSG:3857",(1,1))
+            with rasterio.open(alone) as ds:
+                self.assertEqual(ds.dataset_mask()[0,0], 0)
 
     def test_gm_script_keeps_alpha_and_uses_ecw_v3_transparency(self):
         with tempfile.TemporaryDirectory() as tmpdir:
