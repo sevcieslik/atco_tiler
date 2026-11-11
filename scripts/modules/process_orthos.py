@@ -355,7 +355,16 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
         # The fifth merge band is an in-memory validity marker. It is never
         # written to the client TIFF (which retains exactly four RGBI bands).
         def merge_first_nonwhite(merged_data, new_data, merged_mask, new_mask, **kwargs):
-            candidate = ~np.any(new_mask[:4], axis=0)
+            # Rasterio can pass a scalar False mask for a completely
+            # unmasked source, rather than a 4 x height x width array.
+            # Support scalar, 2-D dataset and per-band 3-D masks.
+            mask = np.asarray(new_mask, dtype=bool)
+            if mask.ndim == 0:
+                candidate = np.full(new_data.shape[1:], not bool(mask), dtype=bool)
+            elif mask.ndim == 2:
+                candidate = ~mask
+            else:
+                candidate = ~np.any(mask[:4], axis=0)
             background = np.all(new_data[:4] == 254, axis=0)
             copy_pixel = (merged_data[4] == 0) & candidate & ~background
             np.copyto(merged_data[:4], new_data[:4], where=copy_pixel[None, :, :])
