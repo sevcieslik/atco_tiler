@@ -65,6 +65,7 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertEqual(self.app.pause_btn["state"], "disabled")
 
     def test_readiness_lights_are_vertical(self):
+        self.app.refresh_mapping()
         chips = self.app.mapping_chip_frame.winfo_children()
         self.assertEqual(len(chips), 3)
         self.assertTrue(all(c.pack_info()["side"] == "top" for c in chips))
