@@ -106,6 +106,27 @@ class OrthoMaskTests(unittest.TestCase):
                 self.assertTrue(np.all(ds.dataset_mask()[0,:] == 0))
                 self.assertTrue(np.all(ds.dataset_mask()[1,:] == 255))
 
+    def test_scalar_rasterio_mask_on_unmasked_source(self):
+        # Reproduce the failure observed on 9L137:
+        # IndexError: invalid index to scalar variable.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "source.tif"
+            data = np.full((4, 16, 16), 100, dtype=np.uint8)
+            data[:, 0, 0] = 254
+            with rasterio.open(src, "w", driver="GTiff", width=16, height=16,
+                               count=4, dtype="uint8", crs="EPSG:3857",
+                               transform=from_origin(0, 16, 1, 1)) as dst:
+                dst.write(data)
+            with rasterio.open(src) as ds:
+                self.assertTrue(np.all(ds.dataset_mask() == 255))
+            out = root / "out.tif"
+            export_tile("TEST", (0,0,16,16), box(0,0,16,16), [src],
+                        out, 4, "EPSG:3857", (1,1))
+            with rasterio.open(out) as ds:
+                self.assertEqual(ds.dataset_mask()[0,0], 0)
+                self.assertEqual(ds.dataset_mask()[0,1], 255)
+
     def test_gm_script_keeps_alpha_and_uses_ecw_v3_transparency(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
