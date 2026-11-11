@@ -19,12 +19,11 @@ def entity_type(entity: str) -> str:
 def client_entity_name(entity: str) -> str:
     """Client-facing entity name.
 
-    TX uses the client circuit code. DX uses the central SQLite entity name
-    with spaces normalized to underscores, so filenames remain filesystem-safe
-    and consistent across TIFF, ECW, LAZ, zLAS and the Tile Index.
+    TX already uses the client circuit code.  The central DX IDs use underscores
+    only because they are filesystem/database-safe; the SoW SQLite uses spaces.
     """
     entity = str(entity).strip()
-    return entity if is_tx(entity) else re.sub(r"\s+", "_", entity)
+    return entity if is_tx(entity) else entity.replace("_", " ")
 
 
 def tile_sequence(blocknum: str) -> str:
