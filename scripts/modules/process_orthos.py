@@ -389,44 +389,45 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
         total_pixels = int(valid.size)
         coverage_pct = (100.0 * valid_pixels / total_pixels) if total_pixels else 0.0
 
-        # Do not use a per-band NoData=255 marker for RGBI imagery: an
-        # otherwise valid pixel may legitimately contain 255 in any band.
-        # Carry one explicit dataset validity mask instead and preserve every
-        # valid source sample byte-for-byte (including 255).
-        data[:, ~valid] = 0
+        # ArcGIS Pro compatibility: restore explicit GeoTIFF NoData=255
+        # while retaining the newer source overlap/background exclusion above.
+        # Any valid sample equal to 255 is nudged to 254 so GIS renderers that
+        # apply band-level nodata do not hide legitimate bright image pixels.
+        # This is a deliberate rollback of the TIFF internal-mask approach.
+        valid_255 = (data == 255) & valid[None, :, :]
+        if np.any(valid_255):
+            data[valid_255] = 254
+        data[:, ~valid] = 255
 
         profile = datasets[0].profile.copy()
-        for key in ('blockxsize','blockysize','photometric','interleave','nodata'):
+        for key in ('blockxsize', 'blockysize', 'photometric', 'interleave', 'nodata'):
             profile.pop(key, None)
         profile.update(
             driver='GTiff', height=data.shape[1], width=data.shape[2], count=4,
-            dtype=data.dtype, transform=affine, crs=crs, nodata=None,
+            dtype=data.dtype, transform=affine, crs=crs, nodata=255,
             tiled=True, blockxsize=512, blockysize=512, compress='lzw',
-            photometric='RGB', BIGTIFF='IF_SAFER'
+            photometric='RGB', BIGTIFF='IF_SAFER',
         )
         final_tmp = out_tif.with_suffix('.nodata.tmp.tif')
         if final_tmp.exists():
             final_tmp.unlink()
-        # GDAL_TIFF_INTERNAL_MASK keeps the 1-bit mask inside the deliverable,
-        # not in an easily forgotten .msk sidecar.
-        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-            with rasterio.open(final_tmp, 'w', **profile) as dst:
-                dst.write(data)
-                dst.colorinterp = (
-                    ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
-                )
-                dst.write_mask((valid.astype(np.uint8) * 255))
-
-        # Read back the delivered pixels/mask before replacing a previous TIFF.
+        with rasterio.open(final_tmp, 'w', **profile) as dst:
+            dst.write(data)
+            dst.colorinterp = (
+                ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
+            )
+            dst.update_tags(
+                ATCO_BLOCKNUM=blocknum,
+                ATCO_BACKGROUND_RULE='RGBI background 255,255,255,255; valid 255 values adjusted to 254',
+                ATCO_BAND4='NIR',
+            )
         with rasterio.open(final_tmp) as check:
-            if check.nodata is not None:
-                raise RuntimeError(f'Unexpected NoData value in {final_tmp}')
-            if not np.array_equal(check.dataset_mask() > 0, valid):
-                raise RuntimeError(f'Internal TIFF mask mismatch for {blocknum}')
+            if check.nodata != 255:
+                raise RuntimeError(f'Expected GeoTIFF NoData=255 for ArcGIS Pro: {final_tmp}')
+            if not np.array_equal(check.read()[:, ~valid], np.full((4, (~valid).sum()), 255, dtype=data.dtype)):
+                raise RuntimeError(f'Output TIFF invalid pixels not set to 255: {final_tmp}')
             if not np.array_equal(check.read()[:, valid], data[:, valid]):
-                raise RuntimeError(f'Valid TIFF sample values changed for {blocknum}')
-        if final_tmp.with_suffix(final_tmp.suffix + '.msk').exists():
-            raise RuntimeError(f'Internal TIFF mask was written as a sidecar: {final_tmp}')
+                raise RuntimeError(f'Valid TIFF samples changed on write: {final_tmp}')
 
         if out_tif.exists():
             out_tif.unlink()
