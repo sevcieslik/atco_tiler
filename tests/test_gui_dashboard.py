@@ -17,8 +17,8 @@ class GitBadgeTests(unittest.TestCase):
             root = Path(directory)
             ref_path = root / ".git" / "refs" / "heads" / "feature"
             ref_path.parent.mkdir(parents=True)
-            ref_path.write_text("123456789abcdef0123456789abcdef012345678\\n")
-            (root / ".git" / "HEAD").write_text("ref: refs/heads/feature\\n")
+            ref_path.write_text("123456789abcdef0123456789abcdef012345678\n")
+            (root / ".git" / "HEAD").write_text("ref: refs/heads/feature\n")
             with patch.object(gui, "PACKAGE_ROOT", root):
                 with patch.object(gui.subprocess, "run", side_effect=FileNotFoundError):
                     self.assertEqual(gui.current_commit(), "1234567")
