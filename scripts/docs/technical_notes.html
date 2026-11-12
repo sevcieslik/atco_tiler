@@ -45,9 +45,10 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <li>Retiler creates internal <strong>Ortho Processing Footprints</strong> aligned to the source pixel grid. These are processing footprints, not the client Tile Index.</li>
 <li>Source imagery is mosaicked/cropped to the processing footprint and masked outside the full circuit AOI.</li>
 <li>Final TIFF remains four bands: Red, Green, Blue, NIR. Band 4 is not Alpha.</li>
-<li>The all-four-band tuples <code>254,254,254,254</code> and <code>255,255,255,255</code> are treated as background during merging. Valid individual 255 values are preserved without substitution.</li><li>The delivered 4-band TIFF has <strong>NoData unset</strong> and carries an <strong>internal GDAL dataset validity mask</strong>. Band 4 remains NIR, never Alpha.</li>
+<li>The all-four-band tuples <code>254,254,254,254</code> and <code>255,255,255,255</code> are treated as background during source mosaicking; valid overlapping image pixels can fill such areas.</li><li><strong>ArcGIS Pro compatibility rollback:</strong> the delivered 4-band TIFF carries explicit <code>NoData=255</code> and background pixels are <code>255</code> across all bands. Valid individual source values of 255 are adjusted to 254 to avoid accidental NoData masking by band-level renderers. Band 4 remains NIR, never Alpha.</li>
 <li>Final GeoTIFF is tiled, LZW compressed, 512 × 512 internal blocks.</li></ul>
-<div class="warn"><strong>QA:</strong> inspect at least one edge/overlap location in ArcGIS Pro. Confirm outside-AOI background is transparent/NoData, band 4 remains NIR, and no black/white edge artefacts are visible.</div>
+<div class="warn"><strong>QA:</strong> inspect at least one edge/overlap location in ArcGIS Pro. Confirm outside-AOI background is automatically transparent/NoData in ArcGIS Pro without manually changing symbology, band 4 remains NIR, and no white/black edge artefacts are visible.</div>
+<div class="note"><strong>Source imagery QA:</strong> The Retiler merges overlapping source TIFFs independently for each approved tile. It does not first create a single full-corridor mosaic. If the input TIFFs were already cropped and contain missing image coverage or white fringes, this may limit results. Prefer full-coverage, uncropped source imagery where available; compare tile 0008/0009 against a full source mosaic before interpreting edge artefacts as a clipping defect.</div>
 </section>
 
 <section class="card" id="ecw"><h2>4. ECW generation</h2>
@@ -55,7 +56,7 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <ul><li>Generated from the final TIFF, using only its Red, Green and Blue bands. NIR is excluded.</li>
 <li>Global Mapper source intermediates are written to <code>QA\Imagery\gm_rgb_input</code> with a new <code>_GM_RGB3_WHITE.tif</code> suffix. Older RGBA intermediates must not be reused.</li>
 <li>Each intermediate contains <strong>exactly 3 bands (RGB)</strong>, with no Alpha and no scalar NoData.</li>
-<li>Pixels outside the delivered TIFF validity mask are explicitly set to white <code>(255,255,255)</code>. In-range valid RGB values are preserved.</li>
+<li>Pixels outside the delivered TIFF NoData mask are explicitly set to white <code>(255,255,255)</code>. In-range valid RGB values are preserved.</li>
 <li>Global Mapper receives the 3-band input without contrast enhancement and exports ECW v3, target compression 10:1, with <code>BG_TRANSPARENT=NO</code>.</li>
 <li><strong>Compatibility decision:</strong> the 3-band ECW does not encode transparency. A white outside-footprint background is expected. Compression may create faint edge fringes; no magenta RGB fill or fourth Alpha band should be present.</li>
 <li>Following any ECW export-configuration change, select <strong>Run Build</strong> and confirm overwrite of existing ECWs. <strong>Rerun Missing</strong> does not replace already-present previous-version ECWs.</li></ul>
