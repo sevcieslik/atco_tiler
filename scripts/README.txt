@@ -78,3 +78,15 @@ v1.06 runtime hotfix
 - Uses the same lightweight runtime footprint as v1.04 and prefers the libmamba solver.
 - Writes the validated 4-band 255,255,255,255 NoData rule directly with Rasterio.
 - OpenFileGDB writing uses Pyogrio when available and Fiona as fallback.
+
+v1.06 runtime detection hotfix (November 2026)
+---------------------------------------------
+INSTALL_RUNTIME.bat uses the project-local scripts\.venv and detects Conda
+installations in non-standard locations including C:\Tools\Miniconda3.
+An optional ATCO_CONDA_BAT environment variable may identify another conda
+batch/executable. The removed D:\ATCO\polygons\01\.venv is no longer used.
+The installer creates/repairs a Python 3.11 environment within the project;
+it does not change the system Python 3.14 or Miniconda base Python 3.10.
+The default Conda solver is used for compatibility with Conda 22.11.1.
+If setup fails after Conda detection, check package download/solver errors,
+then verify the project source GDB and network AOI database are accessible.
