@@ -51,13 +51,15 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 </section>
 
 <section class="card" id="ecw"><h2>4. ECW generation</h2>
-<p><strong>Purpose:</strong> 3-band visual RGB ECW for PLS / visual use.</p>
-<ul><li>Generated from the final TIFF, not directly from source imagery.</li>
-<li>A temporary Global Mapper input is written under <code>QA\Imagery\gm_rgb_input</code>.</li>
-<li>The temporary file contains RGB plus an Alpha band derived from the TIFF validity mask. NIR is deliberately excluded from this temporary fourth band.</li>
-<li>Global Mapper uses the RGB+Alpha intermediate with no contrast enhancement; the export requests transparent background and ECW v3. Do not interpret delivered TIFF band 4 (NIR) as Alpha.</li>
-<li>ECW format v3, target compression 10:1.</li></ul>
-<div class="warn"><strong>QA:</strong> compare ECW against the corresponding TIFF and inspect tile boundaries in PLS. The ECW is a visual RGB product and is not expected to retain NIR.</div>
+<p><strong>Purpose:</strong> RGB-only visual ECW for PLS-CADD and GIS display. This is not the 4-band RGBI TIFF deliverable.</p>
+<ul><li>Generated from the final TIFF, using only its Red, Green and Blue bands. NIR is excluded.</li>
+<li>Global Mapper source intermediates are written to <code>QA\Imagery\gm_rgb_input</code> with a new <code>_GM_RGB3_WHITE.tif</code> suffix. Older RGBA intermediates must not be reused.</li>
+<li>Each intermediate contains <strong>exactly 3 bands (RGB)</strong>, with no Alpha and no scalar NoData.</li>
+<li>Pixels outside the delivered TIFF validity mask are explicitly set to white <code>(255,255,255)</code>. In-range valid RGB values are preserved.</li>
+<li>Global Mapper receives the 3-band input without contrast enhancement and exports ECW v3, target compression 10:1, with <code>BG_TRANSPARENT=NO</code>.</li>
+<li><strong>Compatibility decision:</strong> the 3-band ECW does not encode transparency. A white outside-footprint background is expected. Compression may create faint edge fringes; no magenta RGB fill or fourth Alpha band should be present.</li>
+<li>Following any ECW export-configuration change, select <strong>Run Build</strong> and confirm overwrite of existing ECWs. <strong>Rerun Missing</strong> does not replace already-present previous-version ECWs.</li></ul>
+<div class="warn"><strong>Release QA gate:</strong> build a fresh test ECW (e.g. tile 0008), verify 3-band interpretation and white/no-magenta background in Global Mapper, MicroStation Raster Manager, TerraScan and PLS-CADD. Verify alignment and investigate edge halos. Do not mark compatible before PLS acceptance. TIFF keeps its internal mask and is not altered by this change.</div>
 </section>
 
 <section class="card" id="laz"><h2>5. LAZ generation</h2>
@@ -109,7 +111,7 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 
 <section class="card" id="qa"><h2>9. QA outputs and reruns</h2>
 <table><tr><th>QA area</th><th>Typical outputs</th></tr>
-<tr><td>QA\Imagery</td><td>Processing footprint overlap report, Global Mapper scripts/logs, RGB(A) intermediates and imagery processing report.</td></tr>
+<tr><td>QA\Imagery</td><td>Processing footprint overlap report, Global Mapper scripts/logs, 3-band RGB-white intermediates and imagery processing report.</td></tr>
 <tr><td>QA\LiDAR</td><td>Source inventory, processing report, Return 0 / Synthetic-by-class report and execution metadata.</td></tr>
 <tr><td>QA\LiDAR\EzLAS</td><td>EzLAS conversion/verification logs, command records and validation CSV.</td></tr>
 <tr><td>QA\TILES</td><td>Tile Index attribute export and schema JSON.</td></tr></table>
