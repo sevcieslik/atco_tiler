@@ -477,59 +477,58 @@ def gms_quote(path: Path):
     return str(path).replace('"', "'")
 
 
-def build_gm_rgba_input(src_tif: Path, out_tif: Path):
-    """Create a Global Mapper-only RGBA GeoTIFF.
+def build_gm_rgb_input(src_tif: Path, out_tif: Path):
+    """Three-band visual ECW source: RGB, with invalid TIFF pixels set white.
 
-    The client TIFF remains RGBI and carries an internal dataset mask.
-    ECW must not see NIR as its 4th band because Global Mapper can interpret
-    band 4 as alpha. This intermediate copies RGB byte-for-byte and converts
-    the TIFF's explicit validity mask into a real 0/255 alpha band.
+    The client TIFF keeps four RGBI bands and its internal dataset mask.
+    The Global Mapper ECW input has neither NIR nor Alpha nor scalar NoData.
     """
     out_tif.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_tif.with_suffix('.tmp.tif')
     if tmp.exists():
         tmp.unlink()
     with rasterio.open(src_tif) as src:
-        if src.count < 3:
-            raise ValueError(f'Expected RGB TIFF for ECW conversion: {src_tif}')
-        if any(dt != 'uint8' for dt in src.dtypes[:3]):
-            raise ValueError(f'ECW RGB intermediate expects uint8 RGB bands: {src_tif} has {src.dtypes[:3]}')
+        if src.count < 3 or any(dt != 'uint8' for dt in src.dtypes[:3]):
+            raise ValueError(f'ECW RGB input requires uint8 RGB bands: {src_tif}')
         profile = src.profile.copy()
-        for key in ('blockxsize','blockysize','photometric','interleave','nodata'):
+        for key in ('blockxsize', 'blockysize', 'photometric', 'interleave', 'nodata'):
             profile.pop(key, None)
-        profile.update(
-            driver='GTiff', count=4, dtype='uint8', nodata=None,
-            tiled=True, blockxsize=256, blockysize=256, compress='lzw',
-            photometric='RGB', interleave='pixel', BIGTIFF='IF_SAFER'
-        )
+        profile.update(driver='GTiff', count=3, dtype='uint8', nodata=None,
+                       tiled=True, blockxsize=256, blockysize=256, compress='lzw',
+                       photometric='RGB', interleave='pixel', BIGTIFF='IF_SAFER')
         with rasterio.open(tmp, 'w', **profile) as dst:
-            dst.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+            dst.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue)
             for _, window in src.block_windows(1):
                 rgb = src.read([1, 2, 3], window=window)
-                alpha = src.dataset_mask(window=window)
-                dst.write(rgb, indexes=[1, 2, 3], window=window)
-                dst.write(alpha.astype(np.uint8), indexes=4, window=window)
-            # This is a temporary QA-only file; ensure alpha was actually
-            # produced before Global Mapper receives the raster.
+                valid = src.dataset_mask(window=window) > 0
+                rgb[:, ~valid] = 255
+                dst.write(rgb, window=window)
         with rasterio.open(tmp) as check:
-            if check.colorinterp[3] != ColorInterp.alpha:
-                raise RuntimeError(f'Global Mapper TIFF has no alpha band: {tmp}')
-            with rasterio.open(src_tif) as src:
-                for _, window in src.block_windows(1):
-                    if not np.array_equal(check.read(4, window=window), src.dataset_mask(window=window)):
-                        raise RuntimeError(f'Global Mapper alpha differs from source mask: {tmp}')
+            if check.count != 3 or check.nodata is not None:
+                raise RuntimeError(f'Global Mapper RGB input must have exactly 3 bands: {tmp}')
+            with rasterio.open(src_tif) as source:
+                for _, window in source.block_windows(1):
+                    valid = source.dataset_mask(window=window) > 0
+                    rgb = check.read([1, 2, 3], window=window)
+                    if np.any(rgb[:, ~valid] != 255):
+                        raise RuntimeError(f'Global Mapper RGB background not white: {tmp}')
+                    if not np.array_equal(rgb[:, valid], source.read([1, 2, 3], window=window)[:, valid]):
+                        raise RuntimeError(f'Global Mapper valid RGB changed: {tmp}')
     if out_tif.exists():
         out_tif.unlink()
     tmp.replace(out_tif)
     return out_tif
 
 
-def _rgba_is_current(src_tif: Path, rgba_tif: Path):
-    if not rgba_tif.is_file():
+def _gm_rgb_is_current(src_tif: Path, rgb_tif: Path):
+    if not rgb_tif.is_file():
         return False
     try:
-        return rgba_tif.stat().st_mtime_ns >= src_tif.stat().st_mtime_ns
-    except OSError:
+        if rgb_tif.stat().st_mtime_ns < src_tif.stat().st_mtime_ns:
+            return False
+        with rasterio.open(rgb_tif) as ds:
+            return ds.count == 3 and ds.nodata is None
+    except (OSError, rasterio.errors.RasterioError):
         return False
 
 
@@ -557,27 +556,26 @@ def resolve_parallel_workers(value, pending_count):
 
 
 def prepare_gm_inputs(tiffs, gm_input_dir: Path, workers=None):
-    """Build the Global Mapper RGBA intermediates in parallel and reuse current ones."""
+    """Build RGB-only white-background GM intermediates, never reuse old RGBA."""
     gm_input_dir.mkdir(parents=True, exist_ok=True)
     workers = resolve_parallel_workers(configured_parallel_workers() if workers is None else workers, len(tiffs))
-    outputs = [(tif, gm_input_dir / (tif.stem + '_GM_RGBA.tif')) for tif in tiffs]
-    pending = [(tif, rgba) for tif, rgba in outputs if not _rgba_is_current(tif, rgba)]
+    outputs = [(tif, gm_input_dir / (tif.stem + '_GM_RGB3_WHITE.tif')) for tif in tiffs]
+    pending = [(tif, rgb) for tif, rgb in outputs if not _gm_rgb_is_current(tif, rgb)]
     reused = len(outputs) - len(pending)
-
     if not pending:
-        print(f'RGBA    [########################] {len(outputs):>3}/{len(outputs):<3} | cached', flush=True)
+        print(f'RGB     [########################] {len(outputs):>3}/{len(outputs):<3} | cached', flush=True)
         return outputs
-
     done = reused
-    progress_line('RGBA', done, len(outputs), workers=workers,
+    progress_line('RGB', done, len(outputs), workers=workers,
                   extra=f'{reused} cached' if reused else None)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(build_gm_rgba_input, tif, rgba): (tif, rgba) for tif, rgba in pending}
+        futs = {ex.submit(build_gm_rgb_input, tif, rgb): (tif, rgb) for tif, rgb in pending}
         for fut in as_completed(futs):
             fut.result()
             done += 1
-            progress_line('RGBA', done, len(outputs), workers=workers)
+            progress_line('RGB', done, len(outputs), workers=workers)
     return outputs
+
 
 def make_gm_script(gm_inputs, ecw_dir: Path, gms_path: Path, compression=10):
     gm_log = gms_path.with_suffix('.gm.log')
@@ -587,20 +585,18 @@ def make_gm_script(gm_inputs, ecw_dir: Path, gms_path: Path, compression=10):
         'UNLOAD_ALL',
     ]
     results = []
-    for final_tif, rgba_tif in gm_inputs:
+    for final_tif, rgb_tif in gm_inputs:
         ecw = ecw_dir / (final_tif.stem + '.ecw')
-        # Import all RGBA bands. BAND_SETUP="0,1,2" selected only RGB and
-        # risked dropping the explicit alpha channel before ECW export.
-        # The intermediate already has RGB + alpha; NIR is not present.
+        # Exactly three RGB bands are passed to GM, without an Alpha band.
         lines.append(
-            f'IMPORT FILENAME="{gms_quote(rgba_tif)}" TYPE=AUTO '
+            f'IMPORT FILENAME="{gms_quote(rgb_tif)}" TYPE=AUTO '
             f'CONTRAST_MODE=NONE COLOR_SCALE="0,0,0"'
         )
         lines.append(
             f'EXPORT_RASTER FILENAME="{gms_quote(ecw)}" TYPE=ECW '
-            f'TARGET_COMPRESSION={int(compression)} BG_TRANSPARENT=YES '
+            f'TARGET_COMPRESSION={int(compression)} BG_TRANSPARENT=NO '
             f'ECW_FORMAT_VERSION=3 GEN_PRJ_FILE=YES OVERWRITE_EXISTING=YES '
-            f'LAYER_BOUNDS="{gms_quote(rgba_tif)}" USE_EXACT_BOUNDS=YES'
+            f'LAYER_BOUNDS="{gms_quote(rgb_tif)}" USE_EXACT_BOUNDS=YES'
         )
         lines.append('UNLOAD_ALL')
         results.append((final_tif, ecw))
@@ -750,13 +746,13 @@ def run_global_mapper(gm_exe: Path, gm_inputs, ecw_dir: Path, qa_dir: Path,
     ecw_dir.mkdir(parents=True, exist_ok=True)
     all_pairs = [(t, ecw_dir/(t.stem+'.ecw')) for t, _ in gm_inputs]
     pending = []
-    for final_tif, rgba_tif in gm_inputs:
+    for final_tif, rgb_tif in gm_inputs:
         ecw = ecw_dir / (final_tif.stem + '.ecw')
         if ecw.is_file() and ecw.stat().st_size == 0:
             ecw.unlink(missing_ok=True)
         current = ecw.is_file() and ecw.stat().st_size > 0 and ecw.stat().st_mtime_ns >= final_tif.stat().st_mtime_ns
         if overwrite or not current:
-            pending.append((final_tif, rgba_tif))
+            pending.append((final_tif, rgb_tif))
 
     cached = len(gm_inputs) - len(pending)
     if not pending:
@@ -786,7 +782,7 @@ def run_global_mapper(gm_exe: Path, gm_inputs, ecw_dir: Path, qa_dir: Path,
         while True:
             finished = sum(1 for f in futs if f.done())
             created = sum(
-                1 for tif, _rgba in gm_inputs
+                1 for tif, _rgb in gm_inputs
                 if (ecw_dir/(tif.stem+'.ecw')).is_file() and (ecw_dir/(tif.stem+'.ecw')).stat().st_size > 0
             )
             if created != last_count:
@@ -804,8 +800,8 @@ def run_global_mapper(gm_exe: Path, gm_inputs, ecw_dir: Path, qa_dir: Path,
                 failures.append((gms, proc, missing))
 
     missing_inputs = [
-        (final_tif, rgba_tif)
-        for final_tif, rgba_tif in pending
+        (final_tif, rgb_tif)
+        for final_tif, rgb_tif in pending
         if not (ecw_dir/(final_tif.stem+'.ecw')).is_file()
         or (ecw_dir/(final_tif.stem+'.ecw')).stat().st_size == 0
     ]
@@ -813,7 +809,7 @@ def run_global_mapper(gm_exe: Path, gm_inputs, ecw_dir: Path, qa_dir: Path,
     if failures or missing_inputs:
         print(f'ECW retry: {len(missing_inputs)} missing tile(s), sequential fallback', flush=True)
         if missing_inputs:
-            for final_tif, _rgba_tif in missing_inputs:
+            for final_tif, _rgb_tif in missing_inputs:
                 bad = ecw_dir/(final_tif.stem+'.ecw')
                 if bad.is_file() and bad.stat().st_size == 0:
                     bad.unlink(missing_ok=True)
@@ -823,7 +819,7 @@ def run_global_mapper(gm_exe: Path, gm_inputs, ecw_dir: Path, qa_dir: Path,
             log_path = _write_gm_log(qa_dir, retry_gms.stem, proc)
             missing = [str(ecw) for _, ecw in retry_pairs if not ecw.is_file() or ecw.stat().st_size == 0]
             created = sum(
-                1 for tif, _rgba in gm_inputs
+                1 for tif, _rgb in gm_inputs
                 if (ecw_dir/(tif.stem+'.ecw')).is_file() and (ecw_dir/(tif.stem+'.ecw')).stat().st_size > 0
             )
             progress_line('ECW', created, len(gm_inputs), workers=1)
@@ -834,7 +830,7 @@ def run_global_mapper(gm_exe: Path, gm_inputs, ecw_dir: Path, qa_dir: Path,
                 )
 
     created = sum(
-        1 for tif, _rgba in gm_inputs
+        1 for tif, _rgb in gm_inputs
         if (ecw_dir/(tif.stem+'.ecw')).is_file() and (ecw_dir/(tif.stem+'.ecw')).stat().st_size > 0
     )
     progress_line('ECW', created, len(gm_inputs), workers=workers)
@@ -950,8 +946,8 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
         'ortho_processing_footprint_count': len(ortho_index), 'footprint_gap_m2': gap,
         'footprint_overlap_m2': overlap_m2, 'footprint_overlap_pairs': overlap_pairs,
         'tiff_background': '4-band RGBI with an internal TIFF validity mask; valid 255 preserved; nodata unset',
-        'ecw_background': 'RGBA intermediate alpha -> Global Mapper BG_TRANSPARENT=YES, ECW v3' if make_ecw else None,
-        'ecw_rgb_source': 'dedicated 8-bit RGB copy of TIFF bands 1/2/3; NIR excluded from GM input' if make_ecw else None,
+        'ecw_background': '3-band RGB with white background (255,255,255), no alpha, ECW v3' if make_ecw else None,
+        'ecw_rgb_source': 'dedicated 3-band RGB copy of TIFF bands 1/2/3, white fill outside validity mask' if make_ecw else None,
         'parallel_workers_config': configured_parallel_workers(), 'output_root': str(base),
     }
     (qa_dir/'execution.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
