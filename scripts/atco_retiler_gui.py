@@ -31,15 +31,51 @@ APP_VERSION = "1.07"
 
 
 def current_commit():
-    """Show the local checked-out Git commit, never a stale release constant."""
+    """Read the checked-out Git commit without needing git.exe on PATH.
+
+    The GIS launcher intentionally isolates PATH, so calling git directly is
+    unreliable. Read .git/HEAD and its reference, including packed refs and
+    Git worktree .git pointer files.
+    """
     try:
-        result = subprocess.run(
-            ["git", "-C", str(PACKAGE_ROOT), "rev-parse", "--short=7", "HEAD"],
-            capture_output=True, text=True, timeout=3, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-        )
-        if result.returncode == 0:
-            return result.stdout.strip() or "unknown"
-    except (OSError, subprocess.TimeoutExpired):
+        dotgit = PACKAGE_ROOT / ".git"
+        if dotgit.is_file():
+            pointer = dotgit.read_text(encoding="utf-8").strip()
+            if not pointer.lower().startswith("gitdir:"):
+                return "unknown"
+            gitdir = Path(pointer.split(":", 1)[1].strip())
+            if not gitdir.is_absolute():
+                gitdir = PACKAGE_ROOT / gitdir
+        elif dotgit.is_dir():
+            gitdir = dotgit
+        else:
+            return "unknown"
+        head = (gitdir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            ref = head[5:].strip()
+            loose = gitdir / ref
+            if loose.is_file():
+                head = loose.read_text(encoding="utf-8").strip()
+            else:
+                packed = gitdir / "packed-refs"
+                head = ""
+                if packed.is_file():
+                    for line in packed.read_text(encoding="utf-8").splitlines():
+                        if line and not line.startswith(("#", "^")):
+                            sha, _, name = line.partition(" ")
+                            if name.strip() == ref:
+                                head = sha
+                                break
+                # Linked worktrees may store shared refs in the common git dir.
+                if not head and (gitdir / "commondir").is_file():
+                    common = Path((gitdir / "commondir").read_text(encoding="utf-8").strip())
+                    common = common if common.is_absolute() else gitdir / common
+                    shared_ref = common / ref
+                    if shared_ref.is_file():
+                        head = shared_ref.read_text(encoding="utf-8").strip()
+        if re.fullmatch(r"[0-9a-fA-F]{40,64}", head):
+            return head[:7].lower()
+    except (OSError, UnicodeError, ValueError):
         pass
     return "unknown"
 
