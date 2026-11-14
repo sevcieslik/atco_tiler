@@ -1715,9 +1715,19 @@ class RetilerApp(tk.Tk):
             checks.append(("Input/Orthos", self.mapped.get("orthos") is not None))
         if needs_lidar:
             checks.append(("Input/Point Cloud", self.mapped.get("point_cloud") is not None))
-            import shutil
-            checks.append(("PDAL CLI (INSTALL_LIDAR_SUPPORT.bat)",
-                           shutil.which("pdal") is not None))
+            from ensure_lidar_support import pdal_ready, find_conda
+            if pdal_ready():
+                self.log("OK  PDAL CLI is installed", "INFO")
+            else:
+                try:
+                    found_conda = find_conda()
+                    self.log(
+                        f"OPTIONAL  PDAL not installed; will download automatically "
+                        f"to scripts\\.venv on first LiDAR build (Conda: {found_conda})",
+                        "WARN")
+                except (OSError, ValueError) as exc:
+                    checks.append((
+                        f"Conda required to auto-install PDAL ({exc})", False))
         if "ECW" in selected:
             checks.append(("Global Mapper", core.detect_global_mapper(self.cfg) is not None))
         if "zLAS" in selected:
