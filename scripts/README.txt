@@ -142,32 +142,35 @@ large on disk; ECW also requires an RGB intermediate and Global Mapper.
 
 Unified AOI Registry (v1.08-dev)
 --------------------------------
-There is no manual TX/DX versus Telecom/Substation switch.
-The Build page lists:
-* Circuit AOIs in Input\\aoi, validated against the central entities/revisions
-  table and the published segments under W:\\APPS\\PIT\\ATCO\\segments.
-* Registered Substation/Telecom AOIs from the standalone_aoi_registry table
-  in the SAME central database W:\\APPS\\PIT\\ATCO\\database\\atco_aoi_master.sqlite.
-  These are automatically treated as single-area outputs (no segments).
-All deliverables are grouped by entity. The separate _segments and _area
-product folders are retained to keep products from different geometry coverage
-schemes isolated; operators do not have to select a processing mode.
+One processing screen and one authoritative version registry. No TX/DX versus
+Substation/Telecoms switch. Both entity kinds use the EXISTING central
+W:\\APPS\\PIT\\ATCO\\database\\atco_aoi_master.sqlite database.
 
-To register source polygons, open PowerShell on a Windows workstation
-with W: access, cd to D:\\ATCO\\atco_tiler, and close Retiler:
+Circuit entities (entity_kind='circuit') use approved central segments
+and produce one set of output tiles plus Tile Index.
+Area entities (entity_kind='area') use the polygon from the CURRENT revision
+and produce one TIFF / ECW / LAZ / zLAS file per selected area, without a
+segment index. Both products use their respective _segments / _area folders.
 
-  & .\\scripts\\.venv\\python.exe .\\scripts\\import_standalone_aois.py --source "W:\\NMCP26054\\products\\area" --report "D:\\ATCO\\standalone_aoi_import_report.json"
+The pre-existing W:\\APPS\\PIT\\ATCO\\tools\\atco_aoi_db.py and
+BUILD_ATCO_AOI_DB.bat are the ONLY supported publisher. It scans:
+  W:\\NMCP26054\\products\\circuit\\<Entity>\\05_minimum_coverage_polygon\\vN
+  W:\\NMCP26054\\products\\area\\<Entity>\\05_minimum_coverage_polygon\\vN
+Use menu option 2 (Scan AOIs) for dry-run first. Review last_scan.csv
+before option 3 (Publish new/changed versions). Existing publisher owns
+schema, R01/R02 revision history, source fingerprints and snapshots,
+and the _PUBLISH_LOCK coordination on the network drive.
 
-This first command only INSPECTS sources and writes a report (dry-run).
-Review detected entity names, versions and any rejected files. Once correct:
+Never create an independent area table or run a separate ad-hoc importer.
+The Retiler's central_aoi_catalogue.py only READS the original entities
+and revisions table and verifies the source polygon is still identical
+to the currently published revision (including selected GPKG/GDB layers).
+Any AOI revision must be published using the original registry tools.
 
-  & .\\scripts\\.venv\\python.exe .\\scripts\\import_standalone_aois.py --source "W:\\NMCP26054\\products\\area" --report "D:\\ATCO\\standalone_aoi_import_report_applied.json" --apply
+After publishing, restart the Retiler or refresh source mapping. The GUI
+shows registered area entries alongside local circuit AOIs but never selects
+all area entries automatically. The operator selects intended entities.
 
-The importer makes a timestamped database backup before a single SQLite
-transaction. It never changes existing circuit entities/revisions. It refuses
-invalid/duplicate sources, missing CRS, and edits to already published AOIs.
-When a source polygon changes, publish a new v2/v3 in the source hierarchy
-instead of modifying a registered v1 in place.
-After successful import, restart Retiler or refresh the input source mapping
-to see new registry entries. Only the first local circuit is selected on
-initial launch, never all registered entities.
+Note: No central database writes or source polygons are performed by
+the Retiler itself. This feature requires W: access and Windows UAT before
+release. Main retains stable v1.07.
