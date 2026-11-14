@@ -37,7 +37,7 @@ def read_aoi(path: Path):
 
 def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_source=None,
             make_tiff=False, make_ecw=False, make_laz=False, make_zlas=False,
-            overwrite=False, global_mapper=None, ezlas_exe=None):
+            overwrite=False, global_mapper=None, ezlas_exe=None, entity_name=None, revision=None):
     if make_ecw:
         make_tiff = True
     if make_zlas:
@@ -56,6 +56,17 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
         entity = entity[:-8]
     if not entity or entity in {".", ".."}:
         raise ValueError("Invalid entity name")
+    if entity_name:
+        entity = str(entity_name)
+    if revision:
+        from central_aoi_catalogue import get_standalone_records, validate_standalone
+        matches = [r for r in get_standalone_records()
+                   if r["entity"] == entity and r["revision"] == revision]
+        if len(matches) != 1:
+            raise ValueError(f"Unregistered or ambiguous standalone AOI: {entity} {revision}")
+        if Path(matches[0]["path"]) != polygon:
+            raise ValueError("Standalone AOI source does not match its central registry path")
+        validate_standalone(matches[0])
     stem = f"{entity}_2026_v1"
     base = Path(output_root) / entity
     qa = base / "QA" / "Converter"
@@ -142,6 +153,8 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
 def main():
     ap = argparse.ArgumentParser(description="ATCO standalone AOI converter")
     ap.add_argument("--aoi", type=Path, required=True)
+    ap.add_argument("--entity", type=str)
+    ap.add_argument("--revision", type=str)
     ap.add_argument("--output-root", type=Path, required=True)
     ap.add_argument("--ortho-source", type=Path)
     ap.add_argument("--cloud-source", type=Path)
@@ -156,7 +169,7 @@ def main():
             make_tiff=args.tiff, make_ecw=args.ecw,
             make_laz=args.laz, make_zlas=args.zlas,
             overwrite=args.overwrite, global_mapper=args.global_mapper_exe,
-            ezlas_exe=args.ezlas_exe)
+            ezlas_exe=args.ezlas_exe, entity_name=args.entity, revision=args.revision)
 
 
 if __name__ == "__main__":
