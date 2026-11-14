@@ -1757,12 +1757,15 @@ class RetilerApp(tk.Tk):
             if any(p in selected for p in ("LAZ", "zLAS")):
                 from ensure_lidar_support import pdal_executable, pdal_ready
                 if not pdal_ready():
-                    # LiDAR is optional for install, but a reliable spatial
-                    # preflight must not guess LAS/LAZ extents.
-                    raise RuntimeError(
-                        "PDAL is required to validate LiDAR coverage. "
-                        "Deselect LAZ/zLAS for an imagery-only validation, or "
-                        "install LiDAR support once.")
+                    self.log_queue.put(("LINE",
+                        "PDAL not installed: adding optional LiDAR support before coverage scan..."))
+                    rc = self._run_stream(
+                        [sys.executable, str(TOOL_ROOT / "ensure_lidar_support.py")])
+                    if rc:
+                        raise RuntimeError("Automatic PDAL installation failed. "
+                                           "See Activity Log for details.")
+                    if not pdal_ready():
+                        raise RuntimeError("PDAL installation completed but PDAL is unavailable.")
                 pdal_exe = pdal_executable()
             eligible, excluded = discover_eligible(
                 mapped, selected, pdal_exe=pdal_exe)
