@@ -119,3 +119,24 @@ Faster first-run environment:
   INSTALL_TRAJECTORY_SUPPORT.bat: optional PyArrow for TX trajectory matching.
   EzLAS.exe is still needed for zLAS and Global Mapper for ECW.
 Existing complete runtimes remain usable and are not downgraded.
+
+Mode-isolated output directories (v1.08)
+----------------------------------------
+The same entity may be processed in both modes without mixing or
+overwriting the other mode's products:
+  output\\<ENTITY>\\TIFF_segments\\
+  output\\<ENTITY>\\ECW_segments\\
+  output\\<ENTITY>\\LAZ_segments\\
+  output\\<ENTITY>\\zLAS_segments\\
+  output\\<ENTITY>\\TIFF_area\\
+  output\\<ENTITY>\\ECW_area\\
+  output\\<ENTITY>\\LAZ_area\\
+  output\\<ENTITY>\\zLAS_area\\
+Standard Retiler continues to publish Tile_Index from central segments.
+Converter does not publish Tile Index. Existing v1.07 output folders
+TIFF/ECW/LAZ/zLAS are not migrated or auto-deleted, and are not counted
+as v1.08 cached output. Rebuild using Full Build to generate new folders.
+
+Large-area imagery is written as one windowed BigTIFF with NoData=255,
+without loading the complete AOI into RAM. A full-area TIFF is still very
+large on disk; ECW also requires an RGB intermediate and Global Mapper.
