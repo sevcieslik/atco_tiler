@@ -157,6 +157,12 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None):
             if local_source is None:
                 excluded.append((row["entity"], "local circuit AOI differs from registered revision"))
                 continue
+            approved_segments = (Path(r"W:\\APPS\\PIT\\ATCO\\segments\\circuit")
+                                 / row["entity"] / row["revision"]
+                                 / f"{row['entity']}_AOI_Segments.shp")
+            if not approved_segments.is_file():
+                excluded.append((row["entity"], "approved central segment index unavailable"))
+                continue
         if needs_image:
             key = ("image", row["crs"].to_wkt())
             if key not in cache:
