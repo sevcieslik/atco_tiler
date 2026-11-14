@@ -732,8 +732,8 @@ class RetilerApp(tk.Tk):
     def set_all_products(self, selected):
         if self.running:
             return
-        for value in self.product_vars.values():
-            value.set(bool(selected))
+        for name, value in self.product_vars.items():
+            value.set(bool(selected) and not (self.process_mode.get() == "converter" and name == "Tile Index"))
         self._sync_product_selection()
 
     def _sync_product_selection(self):
@@ -910,8 +910,12 @@ class RetilerApp(tk.Tk):
     def _mode_changed(self):
         self.cfg["processing_mode"] = self.process_mode.get()
         core.save_config(self.cfg)
-        if self.process_mode.get() == "converter":
+        is_converter = self.process_mode.get() == "converter"
+        if is_converter:
             self.product_vars["Tile Index"].set(False)
+        if hasattr(self, "product_checks"):
+            self.product_checks["Tile Index"].configure(
+                state="disabled" if is_converter else "normal")
         self._sync_product_selection()
         self.refresh_mapping()
 
@@ -1032,7 +1036,8 @@ class RetilerApp(tk.Tk):
         self.refresh_product_status()
 
     def selected_products(self):
-        return [k for k,v in self.product_vars.items() if v.get()]
+        return [k for k,v in self.product_vars.items() if v.get() and
+                not (self.process_mode.get() == "converter" and k == "Tile Index")]
 
     def product_paths(self):
         if not self.context:
@@ -1574,8 +1579,9 @@ class RetilerApp(tk.Tk):
         self.run_btn.configure(state="normal")
         self.rerun_btn.configure(state="normal")
         self.aoi_list.configure(state="normal")
-        for check in self.product_checks.values():
-            check.configure(state="normal")
+        for name, check in self.product_checks.items():
+            check.configure(state="disabled" if self.process_mode.get() == "converter"
+                            and name == "Tile Index" else "normal")
         self._sync_product_selection()
         self.pause_btn.configure(state="disabled", text="⏸  Pause")
         self.stop_btn.configure(state="disabled")
@@ -1591,35 +1597,40 @@ class RetilerApp(tk.Tk):
 
     # ---------- validation/settings/QA ----------
     def validate_setup(self):
-        self.log("Validating runtime and sources...", "INFO")
+        """Validate only dependencies needed by selected workflow/products."""
+        self.log("Validating selected mode, runtime and sources...", "INFO")
         checks = []
-        checks.append(("Central AOI DB",(core.CENTRAL_ROOT/"database"/"atco_aoi_master.sqlite").is_file()))
-        checks.append(("Central Segments",(core.CENTRAL_ROOT/"segments"/"circuit").is_dir()))
-        checks.append(("Client source GDB",core.CLIENT_GDB.is_dir()))
-        checks.append(("Trajectory index",(core.TRAJECTORY_ROOT/"trajectory_index.parquet").is_file()))
-        checks.append(("EzLAS.exe",EZLAS.is_file()))
-        checks.append(("Global Mapper",core.detect_global_mapper(self.cfg) is not None))
-        try:
-            import pyogrio
-            gdb_write = pyogrio.list_drivers().get("OpenFileGDB") in ("rw", "raw")
-        except Exception:
-            try:
-                import fiona
-                gdb_write = fiona.supported_drivers.get("OpenFileGDB") in ("rw", "raw")
-            except Exception:
-                gdb_write = False
-        checks.append(("OpenFileGDB write", gdb_write))
-        for key,label in (("aoi","Input/AOI"),("orthos","Input/Orthos"),("point_cloud","Input/Point Cloud")):
-            checks.append((label,self.mapped.get(key) is not None))
+        standard = self.process_mode.get() == "standard"
+        selected = self.selected_products()
+        if standard:
+            checks.append(("Central AOI DB",
+                           (core.CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite").is_file()))
+            checks.append(("Central Segments",
+                           (core.CENTRAL_ROOT / "segments" / "circuit").is_dir()))
+        checks.append(("AOI selected / valid", bool(self.entity_records)))
+        needs_ortho = any(p in selected for p in ("TIFF", "ECW"))
+        needs_lidar = any(p in selected for p in ("LAZ", "zLAS"))
+        if needs_ortho:
+            checks.append(("Input/Orthos", self.mapped.get("orthos") is not None))
+        if needs_lidar:
+            checks.append(("Input/Point Cloud", self.mapped.get("point_cloud") is not None))
+            import shutil
+            checks.append(("PDAL CLI (INSTALL_LIDAR_SUPPORT.bat)",
+                           shutil.which("pdal") is not None))
+        if "ECW" in selected:
+            checks.append(("Global Mapper", core.detect_global_mapper(self.cfg) is not None))
+        if "zLAS" in selected:
+            checks.append(("EzLAS.exe", EZLAS.is_file()))
         bad = []
-        for name,ok in checks:
+        for name, ok in checks:
             self.log(f"{'OK' if ok else 'MISSING'}  {name}", "INFO" if ok else "WARN")
             if not ok:
                 bad.append(name)
         if bad:
-            messagebox.showwarning(APP_NAME, "Validation completed with missing items:\n\n" + "\n".join(bad))
+            messagebox.showwarning(
+                APP_NAME, "Validation completed with missing requirements:\n\n" + "\n".join(bad))
         else:
-            messagebox.showinfo(APP_NAME, "Validation passed.")
+            messagebox.showinfo(APP_NAME, "Validation passed for selected mode and products.")
 
     def save_settings(self):
         try:
