@@ -77,6 +77,17 @@ def enrich_segments(seg, entity: str):
     return out
 
 
+def product_folder(product: str, *, converter: bool = False) -> str:
+    """Keep segmented TX/DX and whole-area converter products isolated.
+
+    Never reuse or overwrite the other processing mode's deliverable folder.
+    """
+    names = {"TIFF", "ECW", "LAZ", "zLAS"}
+    if product not in names:
+        raise ValueError(f"Unknown deliverable product: {product}")
+    return f"{product}_{'area' if converter else 'segments'}"
+
+
 def output_base(output_root: Path, entity: str) -> Path:
     # AOI revision is metadata, not an extra delivery folder.
     return Path(output_root) / str(entity)
