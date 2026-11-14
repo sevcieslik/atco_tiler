@@ -731,6 +731,35 @@ class RetilerApp(tk.Tk):
         self._sync_product_selection()
         return viewport
 
+    def _build_log_page(self):
+        """Full-width searchable/scrollable diagnostics without dashboard clipping."""
+        page = tk.Frame(self.content_wrap, bg=BG)
+        head = tk.Frame(page, bg=BG)
+        head.pack(fill="x", padx=20, pady=(18, 10))
+        tk.Label(head, text="Activity Log", bg=BG, fg=TEXT,
+                 font=("Segoe UI", 18, "bold")).pack(side="left")
+        tk.Button(head, text="Clear", command=self.clear_log,
+                  bg=ROW_BG, fg=TEXT, relief="flat", padx=14, pady=8).pack(side="right")
+        box = tk.Frame(page, bg=LOG_BG, highlightthickness=1,
+                       highlightbackground=BORDER)
+        box.pack(fill="both", expand=True, padx=20, pady=(0, 18))
+        vertical = ttk.Scrollbar(box, orient="vertical")
+        vertical.pack(side="right", fill="y")
+        horizontal = ttk.Scrollbar(box, orient="horizontal")
+        horizontal.pack(side="bottom", fill="x")
+        self.log_full_text = tk.Text(
+            box, bg=LOG_BG, fg=LOG_TEXT, insertbackground=TEXT,
+            font=("Consolas", 10), padx=12, pady=12, wrap="none",
+            xscrollcommand=horizontal.set, yscrollcommand=vertical.set,
+            relief="flat", bd=0, state="disabled")
+        self.log_full_text.pack(fill="both", expand=True)
+        vertical.configure(command=self.log_full_text.yview)
+        horizontal.configure(command=self.log_full_text.xview)
+        for key, color in (("INFO", "#82d7a0"), ("WARN", "#ffe29c"),
+                           ("ERROR", "#ff9292")):
+            self.log_full_text.tag_configure(key, foreground=color)
+        return page
+
     def toggle_log_details(self):
         self._log_expanded = not self._log_expanded
         if self._log_expanded:
@@ -1569,11 +1598,23 @@ class RetilerApp(tk.Tk):
         self.log_text.insert("end", text + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        if hasattr(self, "log_full_text"):
+            self.log_full_text.configure(state="normal")
+            self.log_full_text.insert("end", f"[{stamp}] ")
+            self.log_full_text.insert("end", f"{level:<5} ",
+                                      level if level in ("INFO", "WARN", "ERROR") else None)
+            self.log_full_text.insert("end", text + "\n")
+            self.log_full_text.see("end")
+            self.log_full_text.configure(state="disabled")
 
     def clear_log(self):
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0","end")
         self.log_text.configure(state="disabled")
+        if hasattr(self, "log_full_text"):
+            self.log_full_text.configure(state="normal")
+            self.log_full_text.delete("1.0", "end")
+            self.log_full_text.configure(state="disabled")
 
     def _drain_log_queue(self):
         try:
