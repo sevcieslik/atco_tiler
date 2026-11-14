@@ -67,7 +67,7 @@ if not defined CONDA_BAT goto :missing_conda
 echo.
 echo Repairing ATCO runtime at %ENV_DIR% ...
 echo Using Conda: %CONDA_BAT%
-call "%CONDA_BAT%" install --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas shapely pyproj rasterio numpy pandas pyarrow pdal libpdal
+call "%CONDA_BAT%" install --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
 if errorlevel 1 goto :fail
 
 :validate_final
