@@ -1230,6 +1230,26 @@ class RetilerApp(tk.Tk):
         if needs_pc and not self.mapped.get("point_cloud"):
             messagebox.showerror(APP_NAME, "Point Cloud input is missing.")
             return
+        if needs_pc:
+            pdal_exe = shutil.which("pdal")
+            if not pdal_exe:
+                messagebox.showerror(
+                    APP_NAME,
+                    "PDAL is required for LAZ/zLAS, but it is not installed.\n\n"
+                    "Run scripts\\INSTALL_LIDAR_SUPPORT.bat to add LiDAR support, "
+                    "or deselect LAZ and zLAS to build TIFF/ECW only.\n\n"
+                    "No processing has started.")
+                return
+            # Check that it can actually start with the isolated GIS runtime.
+            probe = subprocess.run(
+                [pdal_exe, "--version"], capture_output=True, text=True,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if probe.returncode:
+                messagebox.showerror(
+                    APP_NAME, "PDAL is installed but cannot start.\n\n"
+                    "Check INSTALL_LIDAR_SUPPORT.bat and the isolated runtime.\n"
+                    + (probe.stderr or probe.stdout or "")[-500:])
+                return
         if "zLAS" in selected and not EZLAS.is_file():
             messagebox.showerror(APP_NAME, f"EzLAS.exe is missing:\n{EZLAS}")
             return
