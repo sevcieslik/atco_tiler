@@ -121,7 +121,8 @@ def _coverage(subject, footprint):
     return float(subject.intersection(footprint).area / subject.area)
 
 
-def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None):
+def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
+                      segments_root=Path(r"W:\\APPS\\PIT\\ATCO\\segments\\circuit")):
     """Return verified candidates and spatial-coverage notes.
 
     Validation requires the Input/AOI polygons to be an actual spatial subset
@@ -157,7 +158,7 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None):
             if local_source is None:
                 excluded.append((row["entity"], "local circuit AOI differs from registered revision"))
                 continue
-            approved_segments = (Path(r"W:\\APPS\\PIT\\ATCO\\segments\\circuit")
+            approved_segments = (Path(segments_root)
                                  / row["entity"] / row["revision"]
                                  / f"{row['entity']}_AOI_Segments.shp")
             if not approved_segments.is_file():
