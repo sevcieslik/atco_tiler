@@ -46,8 +46,9 @@ def name_and_kind(path: Path):
     if not folder:
         raise ValueError(f"Cannot derive Substation/Telecoms entity folder from {path}")
     kind = "substation" if folder.lower().endswith("_substation") else "telecom"
-    entity = re.sub(r"_(Substation|Telecoms?)$", "", folder, flags=re.I)
-    # Preserve client prefixes and original case to avoid collision.
+    entity = folder
+    # Preserve the complete source entity name to avoid collisions between
+    # a substation and a telecom associated with the same named location.
     if not entity:
         raise ValueError(f"Invalid entity name: {folder}")
     return kind, entity
@@ -128,6 +129,8 @@ def import_aois(root: Path = DEFAULT_ROOT, db: Path = DEFAULT_DB, *,
             grouped[key] = item
         except Exception as exc:
             errors.append(f"{shp}: {exc}")
+    if not grouped:
+        errors.append(f"No matching standalone polygon AOIs found beneath {root}")
     summary = dict(source_root=str(root), database=str(db), dry_run=not apply,
                    discovered=len(grouped), rejected=errors,
                    entities=[{k: v for k, v in row.items() if k not in ("polygon_wkb","crs_wkt")}
@@ -142,7 +145,8 @@ def import_aois(root: Path = DEFAULT_ROOT, db: Path = DEFAULT_DB, *,
         return summary
 
     # Backup before mutation, then one write transaction. Do not touch circuit rows.
-    backup = db.with_name(db.name + ".before_standalone_import.bak")
+    backup = db.with_name(db.name + ".standalone_import_" +
+                          datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f") + ".bak")
     with sqlite3.connect(str(db)) as source, sqlite3.connect(str(backup)) as target:
         source.backup(target)
     cols = ("entity_kind","entity_id","revision","source_shp","source_folder",
