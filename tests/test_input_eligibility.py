@@ -49,6 +49,10 @@ class InputEligibilityTests(unittest.TestCase):
                 con.execute("INSERT INTO revisions VALUES (?,?,?,?,?,?,?)",
                             (idx, kind, name, "R01", str(self.local_aoi/"9L137_Polygon.shp"),
                              CRS.from_user_input(crs).to_wkt(), geom.wkb))
+        self.segments_root = self.root / "segments" / "circuit"
+        published = self.segments_root / "9L137" / "R01"
+        published.mkdir(parents=True)
+        (published / "9L137_AOI_Segments.shp").touch()
         self.mapped = {"aoi":self.local_aoi, "orthos":self.ortho, "point_cloud":self.cloud}
 
     def _image(self, filename, x, y, width=20, height=20):
@@ -61,7 +65,7 @@ class InputEligibilityTests(unittest.TestCase):
 
     def test_excludes_remote_area_without_local_overlap(self):
         self._image("in.tif",0,20)
-        eligible, excluded = engine.discover_eligible(self.mapped, ["TIFF"], db=self.db)
+        eligible, excluded = engine.discover_eligible(self.mapped, ["TIFF"], db=self.db, segments_root=self.segments_root)
         self.assertEqual({x["entity"] for x in eligible}, {"9L137","INSIDE_Substation"})
         self.assertNotIn("OUTSIDE_Telecom", [x["entity"] for x in eligible])
         self.assertTrue(all("W:" not in x["entity"] for x in eligible))
@@ -76,7 +80,7 @@ class InputEligibilityTests(unittest.TestCase):
         self._image("in.tif",0,20)
         with patch.object(engine, "_cloud_footprints", return_value=(box(100,100,110,110),1)):
             eligible, excluded = engine.discover_eligible(
-                self.mapped, ["TIFF","LAZ"], db=self.db, pdal_exe="pdal")
+                self.mapped, ["TIFF","LAZ"], db=self.db, pdal_exe="pdal", segments_root=self.segments_root)
         self.assertEqual(eligible, [])
         self.assertTrue(any("insufficient LiDAR" in reason for _, reason in excluded))
 
