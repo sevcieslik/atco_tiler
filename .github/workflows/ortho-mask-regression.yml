@@ -5,6 +5,12 @@ on:
     paths:
       - "scripts/modules/process_orthos.py"
       - "tests/test_ortho_masks.py"
+      - "tests/test_large_ortho.py"
+      - "tests/test_aoi_converter.py"
+      - "tests/test_aoi_batch.py"
+      - "scripts/modules/process_large_ortho.py"
+      - "scripts/modules/process_aoi_converter.py"
+      - "scripts/modules/aoi_batch.py"
       - "tests/test_delivery_naming.py"
       - "scripts/modules/atco_delivery.py"
       - ".github/workflows/ortho-mask-regression.yml"
