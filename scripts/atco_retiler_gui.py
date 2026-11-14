@@ -1230,26 +1230,8 @@ class RetilerApp(tk.Tk):
         if needs_pc and not self.mapped.get("point_cloud"):
             messagebox.showerror(APP_NAME, "Point Cloud input is missing.")
             return
-        if needs_pc:
-            pdal_exe = shutil.which("pdal")
-            if not pdal_exe:
-                messagebox.showerror(
-                    APP_NAME,
-                    "PDAL is required for LAZ/zLAS, but it is not installed.\n\n"
-                    "Run scripts\\INSTALL_LIDAR_SUPPORT.bat to add LiDAR support, "
-                    "or deselect LAZ and zLAS to build TIFF/ECW only.\n\n"
-                    "No processing has started.")
-                return
-            # Check that it can actually start with the isolated GIS runtime.
-            probe = subprocess.run(
-                [pdal_exe, "--version"], capture_output=True, text=True,
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            if probe.returncode:
-                messagebox.showerror(
-                    APP_NAME, "PDAL is installed but cannot start.\n\n"
-                    "Check INSTALL_LIDAR_SUPPORT.bat and the isolated runtime.\n"
-                    + (probe.stderr or probe.stdout or "")[-500:])
-                return
+        # Missing PDAL is installed noninteractively in the worker before any
+        # TIFF/ECW work begins. Do not block the GUI or pre-download for imagery.
         if "zLAS" in selected and not EZLAS.is_file():
             messagebox.showerror(APP_NAME, f"EzLAS.exe is missing:\n{EZLAS}")
             return
@@ -1313,6 +1295,18 @@ class RetilerApp(tk.Tk):
             env = os.environ.copy()
             env["ATCO_PARALLEL_WORKERS"] = str(workers)
             overwrite = [] if rerun else ["--overwrite"]
+            if any(product in selected for product in ("LAZ", "zLAS")):
+                self.log_queue.put(("LINE",
+                    "Checking optional PDAL support for LAZ/zLAS..."))
+                rc = self._run_stream(
+                    [sys.executable, str(TOOL_ROOT / "ensure_lidar_support.py")],
+                    env=env)
+                if rc:
+                    raise RuntimeError(
+                        "Automatic PDAL setup failed. See Activity Log for Conda errors.")
+                if self.stop_requested:
+                    self.log_queue.put(("STOP", "Build stopped during PDAL setup"))
+                    return
             for idx, record in enumerate(records, 1):
                 if self.stop_requested:
                     break
