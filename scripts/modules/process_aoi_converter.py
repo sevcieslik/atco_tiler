@@ -15,6 +15,7 @@ from pyproj import CRS
 from shapely.ops import unary_union
 
 import process_orthos as ortho
+from atco_delivery import product_folder
 import process_lidar as lidar
 
 
@@ -72,7 +73,7 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
                 f"Single AOI is {pixels:,} pixels; this converter currently caps a TIFF at "
                 "150 million pixels to avoid running out of memory. Split or use blockwise processing."
             )
-        tif = base / "TIFF" / f"{stem}.tif"
+        tif = base / product_folder("TIFF", converter=True) / f"{stem}.tif"
         status, valid, coverage = ortho.export_tile(
             stem, bounds, geom, files, tif, bands, crs, res, overwrite=overwrite)
         if not tif.is_file() or tif.stat().st_size == 0:
@@ -85,7 +86,7 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
             rgb_dir = qa / "gm_rgb_input"
             pairs = ortho.prepare_gm_inputs([tif], rgb_dir)
             out_pairs = ortho.run_global_mapper(
-                gm, pairs, base / "ECW", qa, compression=10,
+                gm, pairs, base / product_folder("ECW", converter=True), qa, compression=10,
                 workers=1, overwrite=overwrite)
             ecw = out_pairs[0][1]
             if not ecw.is_file() or ecw.stat().st_size == 0:
@@ -99,7 +100,7 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
         chosen = lidar.intersecting_sources(geom, inventory)
         if not chosen:
             raise ValueError(f"No point-cloud coverage for AOI {entity}")
-        laz = base / "LAZ" / f"{stem}.laz"
+        laz = base / product_folder("LAZ", converter=True) / f"{stem}.laz"
         if overwrite or not laz.is_file() or laz.stat().st_size == 0:
             lidar.run_pdal_segment(SimpleNamespace(geometry=geom), chosen, laz, None, point_crs)
             laz_status = "created"
@@ -113,14 +114,14 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
             ezlas = Path(ezlas_exe) if ezlas_exe else lidar.find_ezlas()
             if not ezlas or not ezlas.is_file():
                 raise FileNotFoundError("EzLAS.exe is required for zLAS conversion")
-            zlas = base / "zLAS" / f"{stem}.zlas"
+            zlas = base / product_folder("zLAS", converter=True) / f"{stem}.zlas"
             if overwrite or not zlas.is_file() or zlas.stat().st_size == 0:
                 temp_dir = qa / "temp_las_for_zlas"
                 temp_dir.mkdir(parents=True, exist_ok=True)
                 tmp_las = temp_dir / f"{stem}.las"
                 lidar.temp_las_from_existing_laz(laz, tmp_las, point_crs)
                 created = lidar.convert_zlas_batch(
-                    temp_dir, base / "zLAS", ezlas, [stem],
+                    temp_dir, base / product_folder("zLAS", converter=True), ezlas, [stem],
                     lidar.horizontal_crs(point_crs), qa_dir=qa)
                 tmp_las.unlink(missing_ok=True)
                 if zlas not in created:
