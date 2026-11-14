@@ -95,6 +95,28 @@ class DashboardSmokeTests(unittest.TestCase):
         self.app.pause_btn.configure(state="disabled")
         self.assertEqual(self.app.pause_btn["state"], "disabled")
 
+    def test_validate_control_is_beside_sources_and_badges_are_gated(self):
+        self.app.refresh_mapping()
+        self.assertEqual(self.app.validate_btn.winfo_manager(), "grid")
+        self.assertEqual(int(self.app.validate_btn.grid_info()["row"]), 2)
+        self.assertEqual(int(self.app.validate_btn.grid_info()["column"]), 3)
+        self.assertEqual(
+            self.app.input_badge_states,
+            {"aoi": "pending", "orthos": "pending", "point_cloud": "pending"})
+        self.assertTrue(all(
+            child["text"].startswith("○")
+            for child in self.app.mapping_chip_frame.winfo_children()))
+        self.app._set_input_badges({
+            "aoi": "validated", "orthos": "validated",
+            "point_cloud": "validated"})
+        self.assertTrue(all(
+            child["text"].startswith("●")
+            for child in self.app.mapping_chip_frame.winfo_children()))
+        self.app._invalidate_input_validation()
+        self.assertTrue(all(
+            child["text"].startswith("○")
+            for child in self.app.mapping_chip_frame.winfo_children()))
+
     def test_readiness_lights_are_vertical(self):
         self.app.refresh_mapping()
         chips = self.app.mapping_chip_frame.winfo_children()
