@@ -1,5 +1,5 @@
-ATCO Retiler v1.06
-==================
+ATCO Retiler v1.08-dev
+======================
 
 Launch:
     ATCO_RETILER.bat
@@ -90,3 +90,32 @@ it does not change the system Python 3.14 or Miniconda base Python 3.10.
 The default Conda solver is used for compatibility with Conda 22.11.1.
 If setup fails after Conda detection, check package download/solver errors,
 then verify the project source GDB and network AOI database are accessible.
+
+v1.08-dev (not merged / UAT required)
+------------------------------------
+Standard Retiler accepts multiple *_Polygon.shp files in input\\aoi.
+Operators can select one or more entities in the GUI. Each must match the
+central AOI registry and have its own published segments; all outputs remain
+separate per entity. One failed entity should be reviewed before delivery.
+
+Client delivery naming:
+  TIFF, ECW: <Circuit>_<TileID>_<Year>_5cm_RGBN_<version>.<ext>
+  LAZ, zLAS: <Circuit>_<TileID>_<version>.<ext>
+  Tile Index: <Circuit>_<Year>_Tiles_<version>.shp
+Example 9L137_0008_2026_5cm_RGBN_v1.tif / 9L137_0008_v1.laz.
+The filename says RGBN per the client table, although band 4 remains NIR
+(RGBI); this naming discrepancy is pending client confirmation.
+
+AOI Converter mode supports standalone polygon shapefiles for Telecoms and
+Substations, without a central registry or segment database. Each shapefile
+is a separate un-tiled entity. Output filename stem is provisionally
+<Entity>_2026_v1. Tile Index is disabled for the converter.
+The current converter rejects single TIFF exports above 150 million pixels
+rather than risk exhausting RAM; blockwise large-mosaic support is future work.
+
+Faster first-run environment:
+  INSTALL_RUNTIME.bat: base GeoPandas + Rasterio stack (TIFF/ECW).
+  INSTALL_LIDAR_SUPPORT.bat: optional PDAL CLI for LAZ and zLAS.
+  INSTALL_TRAJECTORY_SUPPORT.bat: optional PyArrow for TX trajectory matching.
+  EzLAS.exe is still needed for zLAS and Global Mapper for ECW.
+Existing complete runtimes remain usable and are not downgraded.
