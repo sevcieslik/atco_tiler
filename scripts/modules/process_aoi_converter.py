@@ -1,8 +1,8 @@
 """Standalone single-AOI TIFF/ECW/LAZ/zLAS converter for Telecoms/Substations.
 
-No central registry or segment set is required. Every SHP is processed
-independently and outputs one file per selected product. Large imagery AOIs
-are blocked before allocating a full raster until blockwise export is added.
+Standalone area geometry is validated against the existing ATCO operational
+AOI registry before processing. No segment index is required. Large imagery
+AOIs use windowed BigTIFF export to keep memory bounded.
 """
 from __future__ import annotations
 import argparse
@@ -20,10 +20,11 @@ from atco_delivery import product_folder
 import process_lidar as lidar
 
 
-def read_aoi(path: Path):
-    if not path.is_file() or path.suffix.lower() != ".shp":
-        raise ValueError(f"Expected a polygon shapefile: {path}")
-    frame = gpd.read_file(path)
+def read_aoi(path: Path, layer=None):
+    path = Path(path)
+    if not path.exists() or path.suffix.lower() not in (".shp", ".gpkg", ".geojson", ".gdb"):
+        raise ValueError(f"Expected polygon SHP/GPKG/GeoJSON/GDB: {path}")
+    frame = gpd.read_file(path, **({"layer": layer} if layer else {}))
     if frame.empty or not frame.crs:
         raise ValueError(f"AOI is empty or missing CRS: {path}")
     if not frame.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).all():
@@ -38,7 +39,7 @@ def read_aoi(path: Path):
 
 def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_source=None,
             make_tiff=False, make_ecw=False, make_laz=False, make_zlas=False,
-            overwrite=False, global_mapper=None, ezlas_exe=None, entity_name=None, revision=None):
+            overwrite=False, global_mapper=None, ezlas_exe=None, entity_name=None, revision=None, aoi_layer=None):
     if make_ecw:
         make_tiff = True
     if make_zlas:
@@ -51,7 +52,7 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
         raise ValueError("LiDAR source required for LAZ/zLAS")
 
     polygon = Path(aoi_path)
-    geom, crs = read_aoi(polygon)
+    geom, crs = read_aoi(polygon, layer=aoi_layer)
     entity = polygon.stem
     if entity.lower().endswith("_polygon"):
         entity = entity[:-8]
@@ -63,11 +64,12 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
         sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from central_aoi_catalogue import get_standalone_records, validate_standalone
         matches = [r for r in get_standalone_records()
-                   if r["entity"] == entity and r["revision"] == revision]
+                   if r["kind"] == "area" and r["entity"] == entity
+                   and r["revision"] == revision]
         if len(matches) != 1:
             raise ValueError(f"Unregistered or ambiguous standalone AOI: {entity} {revision}")
-        if Path(matches[0]["path"]) != polygon:
-            raise ValueError("Standalone AOI source does not match its central registry path")
+        if (Path(matches[0]["path"]) != polygon or matches[0].get("layer") != aoi_layer):
+            raise ValueError("AOI source and layer do not match central registry")
         validate_standalone(matches[0])
     stem = f"{entity}_2026_v1"
     base = Path(output_root) / entity
@@ -157,6 +159,7 @@ def main():
     ap.add_argument("--aoi", type=Path, required=True)
     ap.add_argument("--entity", type=str)
     ap.add_argument("--revision", type=str)
+    ap.add_argument("--aoi-layer", type=str)
     ap.add_argument("--output-root", type=Path, required=True)
     ap.add_argument("--ortho-source", type=Path)
     ap.add_argument("--cloud-source", type=Path)
@@ -171,7 +174,8 @@ def main():
             make_tiff=args.tiff, make_ecw=args.ecw,
             make_laz=args.laz, make_zlas=args.zlas,
             overwrite=args.overwrite, global_mapper=args.global_mapper_exe,
-            ezlas_exe=args.ezlas_exe, entity_name=args.entity, revision=args.revision)
+            ezlas_exe=args.ezlas_exe, entity_name=args.entity,
+            revision=args.revision, aoi_layer=args.aoi_layer)
 
 
 if __name__ == "__main__":
