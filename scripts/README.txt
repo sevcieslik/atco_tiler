@@ -106,12 +106,11 @@ Example 9L137_0008_2026_5cm_RGBN_v1.tif / 9L137_0008_v1.laz.
 The filename says RGBN per the client table, although band 4 remains NIR
 (RGBI); this naming discrepancy is pending client confirmation.
 
-AOI Converter mode supports standalone polygon shapefiles for Telecoms and
-Substations, without a central registry or segment database. Each shapefile
-is a separate un-tiled entity. Output filename stem is provisionally
-<Entity>_2026_v1. Tile Index is disabled for the converter.
-The current converter rejects single TIFF exports above 150 million pixels
-rather than risk exhausting RAM; blockwise large-mosaic support is future work.
+Registered Substation/Telecom AOIs use the central SQLite registry. No separate
+mode selection is required. Each AOI is delivered as a single un-tiled entity
+with provisional stem <Entity>_2026_v1; only circuits produce Tile Index.
+Large-area mosaics use bounded-window BigTIFF export (rather than loading a
+complete raster into RAM), with output disk space preflight.
 
 Faster first-run environment:
   INSTALL_RUNTIME.bat: base GeoPandas + Rasterio stack (TIFF/ECW).
@@ -122,8 +121,8 @@ Existing complete runtimes remain usable and are not downgraded.
 
 Mode-isolated output directories (v1.08)
 ----------------------------------------
-The same entity may be processed in both modes without mixing or
-overwriting the other mode's products:
+Segmented circuits and standalone area entities are automatically separated
+into their appropriate deliverable directories:
   output\\<ENTITY>\\TIFF_segments\\
   output\\<ENTITY>\\ECW_segments\\
   output\\<ENTITY>\\LAZ_segments\\
@@ -132,8 +131,8 @@ overwriting the other mode's products:
   output\\<ENTITY>\\ECW_area\\
   output\\<ENTITY>\\LAZ_area\\
   output\\<ENTITY>\\zLAS_area\\
-Standard Retiler continues to publish Tile_Index from central segments.
-Converter does not publish Tile Index. Existing v1.07 output folders
+Circuits continue to publish Tile Index from central segments.
+Standalone AOIs do not publish a Tile Index. Existing v1.07 output folders
 TIFF/ECW/LAZ/zLAS are not migrated or auto-deleted, and are not counted
 as v1.08 cached output. Rebuild using Full Build to generate new folders.
 
@@ -154,20 +153,15 @@ All deliverables are grouped by entity. The separate _segments and _area
 product folders are retained to keep products from different geometry coverage
 schemes isolated; operators do not have to select a processing mode.
 
-To register the source polygons from the ATCO area products folder,
-run from a Windows workstation with W: access, with Retiler CLOSED:
+To register source polygons, open PowerShell on a Windows workstation
+with W: access, cd to D:\\ATCO\\atco_tiler, and close Retiler:
 
-  scripts\\.venv\\python.exe scripts\\import_standalone_aois.py ^
-    --source "W:\\NMCP26054\\products\\area" ^
-    --report "D:\\ATCO\\standalone_aoi_import_report.json"
+  & .\\scripts\\.venv\\python.exe .\\scripts\\import_standalone_aois.py --source "W:\\NMCP26054\\products\\area" --report "D:\\ATCO\\standalone_aoi_import_report.json"
 
 This first command only INSPECTS sources and writes a report (dry-run).
 Review detected entity names, versions and any rejected files. Once correct:
 
-  scripts\\.venv\\python.exe scripts\\import_standalone_aois.py ^
-    --source "W:\\NMCP26054\\products\\area" ^
-    --report "D:\\ATCO\\standalone_aoi_import_report_applied.json" ^
-    --apply
+  & .\\scripts\\.venv\\python.exe .\\scripts\\import_standalone_aois.py --source "W:\\NMCP26054\\products\\area" --report "D:\\ATCO\\standalone_aoi_import_report_applied.json" --apply
 
 The importer makes a timestamped database backup before a single SQLite
 transaction. It never changes existing circuit entities/revisions. It refuses
