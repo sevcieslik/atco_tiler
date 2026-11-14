@@ -602,14 +602,14 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
             fldate = ''
             flightline = ''
             if laz_dir is not None:
-                laz_path = laz_dir / f'{row.DeliveryName}.laz'
+                laz_path = laz_dir / f'{row.PointCloudName}.laz'
                 fldate, flightline = trajectory_attributes(laz_path, trajectory_index)
             records.append({
                 'BlockNum': str(row.TileSeq),
                 'ZONE': str(zone),
                 'YEAR': str(YEAR),
                 'LINE': str(circuit),
-                'NAME': str(row.DeliveryName),
+                'NAME': str(row.PointCloudName),
                 'fldate': fldate,
                 'Flightline': flightline,
                 'geometry': row.geometry,
@@ -1129,7 +1129,7 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
 
     segment_jobs = []
     for _, row in seg.iterrows():
-        segment_jobs.append((str(row.DeliveryName), row))
+        segment_jobs.append((str(row.PointCloudName), row))
 
     laz_workers = resolve_parallel_workers(configured_parallel_workers(), len(segment_jobs))
 
