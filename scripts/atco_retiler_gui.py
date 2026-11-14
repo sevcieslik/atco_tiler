@@ -1415,24 +1415,30 @@ class RetilerApp(tk.Tk):
             self.log(f"Stop: could not terminate full process tree: {exc}", "WARN")
 
     def _cleanup_partial_outputs(self):
-        base = self.current_base()
-        if not base or not base.exists():
-            return
-        for p in list(base.rglob("*.tmp")) + list(base.rglob("*.tmp.*")):
-            try:
-                if p.is_file():
-                    p.unlink()
-            except OSError:
-                pass
-        for folder in (base/"TIFF", base/"ECW", base/"LAZ", base/"zLAS"):
-            if folder.is_dir():
-                for p in folder.iterdir():
-                    try:
-                        if p.is_file() and p.stat().st_size == 0:
-                            p.unlink()
-                    except OSError:
-                        pass
-        shutil.rmtree(base/"QA"/"LiDAR"/"temp_las_for_zlas", ignore_errors=True)
+        # A stopped multi-entity run may leave temporary files beyond the first entity.
+        bases = ([core.output_base(self.output_root, r["entity"]) for r in self.entity_records]
+                 if self.entity_records else [self.current_base()])
+        for base in bases:
+            if not base or not base.exists():
+                continue
+            for p in list(base.rglob("*.tmp")) + list(base.rglob("*.tmp.*")):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                except OSError:
+                    pass
+            for folder in (base / "TIFF", base / "ECW", base / "LAZ", base / "zLAS"):
+                if folder.is_dir():
+                    for p in folder.iterdir():
+                        try:
+                            if p.is_file() and p.stat().st_size == 0:
+                                p.unlink()
+                        except OSError:
+                            pass
+            shutil.rmtree(base / "QA" / "LiDAR" / "temp_las_for_zlas",
+                          ignore_errors=True)
+            shutil.rmtree(base / "QA" / "Converter" / "temp_las_for_zlas",
+                          ignore_errors=True)
 
     def stop_build(self, confirm=True):
         if not self.running:
