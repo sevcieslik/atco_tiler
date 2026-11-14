@@ -1313,6 +1313,10 @@ class RetilerApp(tk.Tk):
                     f"ENTITY {idx}/{len(records)}: {record['entity']} ({record['kind']})"))
                 if not record["has_segments"]:
                     products = [p for p in selected if p != "Tile Index"]
+                    if not products:
+                        self.log_queue.put(("LINE",
+                            "Skipping area entity: Tile Index only applies to circuits"))
+                        continue
                     args = [
                         sys.executable, str(MODULES / "process_aoi_converter.py"),
                         "--aoi", aoi, "--entity", record["entity"],
@@ -1738,7 +1742,7 @@ class RetilerApp(tk.Tk):
             messagebox.showwarning(
                 APP_NAME, "Validation completed with missing requirements:\n\n" + "\n".join(bad))
         else:
-            messagebox.showinfo(APP_NAME, "Validation passed for selected mode and products.")
+            messagebox.showinfo(APP_NAME, "Validation passed for selected entities and products.")
 
     def save_settings(self):
         try:
