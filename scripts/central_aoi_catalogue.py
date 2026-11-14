@@ -33,12 +33,16 @@ def get_standalone_records(db: Path = DEFAULT_DB):
                  AND r.entity_id = e.entity_id
                ORDER BY e.entity_id"""
         ).fetchall()
-    return [
-        dict(kind="area", entity=entity, revision=revision,
-             path=Path(source), crs_wkt=crs_wkt, polygon_wkb=polygon,
-             revision_id=rid, source_version=version, has_segments=False)
-        for entity, revision, source, crs_wkt, polygon, rid, version in rows
-    ]
+    results = []
+    for entity, revision, source, crs_wkt, polygon, rid, version in rows:
+        # Original publisher stores GPKG/FileGDB layer as "path::layer".
+        filepath, separator, layer = source.partition("::")
+        results.append(dict(
+            kind="area", entity=entity, revision=revision,
+            path=Path(filepath), layer=layer if separator else None,
+            source_ref=source, crs_wkt=crs_wkt, polygon_wkb=polygon,
+            revision_id=rid, source_version=version, has_segments=False))
+    return results
 
 
 def validate_standalone(record):
@@ -50,7 +54,7 @@ def validate_standalone(record):
     path = Path(record["path"])
     if not path.is_file():
         raise FileNotFoundError(f"Registered AOI source unavailable: {path}")
-    frame = gpd.read_file(path)
+    frame = gpd.read_file(path, **({"layer": record["layer"]} if record.get("layer") else {}))
     if frame.empty or not frame.crs or not frame.geometry.is_valid.all():
         raise ValueError(f"Invalid registered AOI shapefile: {path}")
     kinds = frame.geometry.geom_type.dropna()
