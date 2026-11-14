@@ -362,22 +362,27 @@ class RetilerApp(tk.Tk):
         tk.Label(self.sidebar, text="PROCESSING MODE", bg=NAV, fg=MUTED,
                  anchor="w", font=("Segoe UI", 9, "bold")).pack(
             fill="x", padx=16, pady=(13, 6))
+        # One joined left/right switch, not two stacked navigation boxes.
+        switch = tk.Frame(self.sidebar, bg=BORDER, bd=1)
+        switch.pack(fill="x", padx=11, pady=(0, 9))
+        switch.grid_columnconfigure(0, weight=1, uniform="mode")
+        switch.grid_columnconfigure(1, weight=1, uniform="mode")
         self.mode_buttons = []
-        for value, label in (
-            ("standard", "TX / DX  Segments"),
-            ("converter", "Telecom / Substation"),
-        ):
+        for column, (value, label) in enumerate((
+            ("standard", "TX / DX"),
+            ("converter", "Telecom"),
+        )):
             button = tk.Radiobutton(
-                self.sidebar, text=label, value=value, variable=self.process_mode,
+                switch, text=label, value=value, variable=self.process_mode,
                 command=self._mode_changed, indicatoron=False,
                 bg=ROW_BG, fg=TEXT, selectcolor=GREEN_DARK,
                 activebackground=GREEN_DARK, activeforeground="white",
-                font=("Segoe UI", 10, "bold"), anchor="w",
-                relief="flat", bd=0, highlightthickness=0, padx=13, pady=10)
-            button.pack(fill="x", padx=11, pady=2)
+                font=("Segoe UI", 10, "bold"), anchor="center",
+                relief="flat", bd=0, highlightthickness=0, padx=3, pady=10)
+            button.grid(row=0, column=column, sticky="ew")
             self.mode_buttons.append(button)
         tk.Frame(self.sidebar, bg=BORDER, height=1).pack(
-            fill="x", padx=14, pady=(12, 6))
+            fill="x", padx=14, pady=(3, 6))
 
         self.nav_buttons = {}
         items = [
@@ -578,26 +583,24 @@ class RetilerApp(tk.Tk):
         self._dashboard_button(setup, "Open Output", self.open_output).grid(
             row=2, column=2, sticky="e", padx=(8, 6), pady=(0, 7))
 
-        # v1.08: explicit mode and multi-AOI selection.
-        mode_outer, mode_body = self.card(page, "Processing Mode & Entities")
-        mode_outer.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
-        row = tk.Frame(mode_body, bg=CARD)
-        row.pack(fill="x", padx=16, pady=(0, 12))
-        self._dashboard_label(row, "Entities to process (Ctrl/Shift for multiple):",
-                              size=9, color=MUTED).pack(anchor="w")
+        # Entity selection belongs to Project Setup, not a second mode section.
+        entity_area = tk.Frame(setup, bg=CARD)
+        entity_area.grid(row=3, column=0, columnspan=4, sticky="ew",
+                         padx=16, pady=(3, 12))
+        entity_header = tk.Frame(entity_area, bg=CARD)
+        entity_header.pack(fill="x")
+        self._dashboard_label(
+            entity_header, "Entities to process (Ctrl/Shift for multiple)",
+            size=9, color=MUTED).pack(side="left")
+        tk.Button(entity_header, text="Select All", command=self._select_all_aois,
+                  bg=ROW_BG, fg=TEXT, relief="flat", padx=9).pack(side="right")
         self.aoi_list = tk.Listbox(
-            row, selectmode=tk.EXTENDED, exportselection=False, height=4,
+            entity_area, selectmode=tk.EXTENDED, exportselection=False, height=2,
             bg=NAV_2, fg=TEXT, selectbackground=GREEN_DARK,
             selectforeground="#ffffff", font=("Consolas", 10), relief="flat")
         self.aoi_list.pack(fill="x", expand=True, pady=(5, 0))
-        self.aoi_list.bind("<<ListboxSelect>>", lambda _event: self._update_aoi_context())
-        tools_row = tk.Frame(row, bg=CARD)
-        tools_row.pack(fill="x", pady=(6, 0))
-        tk.Button(tools_row, text="Select All", command=self._select_all_aois,
-                  bg=ROW_BG, fg=TEXT, relief="flat", padx=10).pack(side="left")
-        self._dashboard_label(
-            tools_row, "Each entity is validated and delivered independently.",
-            size=9, color=MUTED).pack(side="left", padx=14)
+        self.aoi_list.bind("<<ListboxSelect>>",
+                           lambda _event: self._update_aoi_context())
 
         # Progress table: checkboxes are the authoritative product selectors.
         progress_outer, progress = self.card(page, "Products & Progress")
@@ -713,14 +716,23 @@ class RetilerApp(tk.Tk):
         log_head = tk.Frame(log_panel, bg=CARD)
         log_head.pack(fill="x", padx=13, pady=(10, 7))
         self._dashboard_label(log_head, "▸  Activity Log", size=11, bold=True).pack(side="left")
+        self._dashboard_label(log_head, "Full-screen log available on the left",
+                              size=9, color=MUTED).pack(side="left", padx=14)
         self.log_toggle_btn = self._dashboard_button(
             log_head, "Show Details ▼", self.toggle_log_details)
         self.log_toggle_btn.pack(side="right")
         self._dashboard_button(log_head, "Open QA Folder", self.open_qa_folder).pack(side="right", padx=(0, 7))
         self._dashboard_button(log_head, "Clear", self.clear_log).pack(side="right", padx=(0, 7))
-        self.log_text = tk.Text(log_panel, height=3, bg=LOG_BG, fg=LOG_TEXT,
-                                insertbackground=TEXT, relief="flat",
-                                font=("Consolas", 9), padx=10, pady=7, wrap="none")
+        log_view = tk.Frame(log_panel, bg=LOG_BG)
+        log_view.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.log_scroll = ttk.Scrollbar(log_view, orient="vertical")
+        self.log_scroll.pack(side="right", fill="y")
+        self.log_text = tk.Text(
+            log_view, height=12, bg=LOG_BG, fg=LOG_TEXT,
+            insertbackground=TEXT, relief="flat", font=("Consolas", 10),
+            padx=10, pady=8, wrap="word",
+            yscrollcommand=self.log_scroll.set)
+        self.log_scroll.configure(command=self.log_text.yview)
         # Log remains hidden until the operator explicitly expands it.
         self.log_text.pack_forget()
         self.log_text.tag_configure("INFO", foreground="#82d7a0")
@@ -763,7 +775,7 @@ class RetilerApp(tk.Tk):
     def toggle_log_details(self):
         self._log_expanded = not self._log_expanded
         if self._log_expanded:
-            self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+            self.log_text.pack(fill="both", expand=True)
             self.log_toggle_btn.configure(text="Hide Details ▲")
         else:
             self.log_text.pack_forget()
