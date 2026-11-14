@@ -64,7 +64,8 @@ class DashboardSmokeTests(unittest.TestCase):
         self.app._enforce_product_dependencies("TIFF")
         self.assertFalse(self.app.product_vars["ECW"].get())
         self.app.set_all_products(True)
-        self.assertEqual(len(self.app.selected_products()), 5)
+        # Index is only available when at least one selected entity has segments.
+        self.assertEqual(len(self.app.selected_products()), 4)
         self.app.product_vars["LAZ"].set(False)
         self.app._enforce_product_dependencies("LAZ")
         self.assertFalse(self.app.product_vars["zLAS"].get())
