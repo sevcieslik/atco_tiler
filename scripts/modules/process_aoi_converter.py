@@ -1,0 +1,159 @@
+"""Standalone single-AOI TIFF/ECW/LAZ/zLAS converter for Telecoms/Substations.
+
+No central registry or segment set is required. Every SHP is processed
+independently and outputs one file per selected product. Large imagery AOIs
+are blocked before allocating a full raster until blockwise export is added.
+"""
+from __future__ import annotations
+import argparse
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import geopandas as gpd
+from pyproj import CRS
+from shapely.ops import unary_union
+
+import process_orthos as ortho
+import process_lidar as lidar
+
+
+def read_aoi(path: Path):
+    if not path.is_file() or path.suffix.lower() != ".shp":
+        raise ValueError(f"Expected a polygon shapefile: {path}")
+    frame = gpd.read_file(path)
+    if frame.empty or not frame.crs:
+        raise ValueError(f"AOI is empty or missing CRS: {path}")
+    if not frame.geometry.geom_type.isin(["Polygon", "MultiPolygon"]).all():
+        raise ValueError(f"Only polygon AOIs are supported: {path}")
+    if not frame.geometry.is_valid.all():
+        raise ValueError(f"AOI has invalid polygons: {path}")
+    geom = unary_union([g for g in frame.geometry if g is not None and not g.is_empty])
+    if geom.is_empty:
+        raise ValueError(f"AOI has no non-empty geometry: {path}")
+    return geom, CRS.from_user_input(frame.crs)
+
+
+def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_source=None,
+            make_tiff=False, make_ecw=False, make_laz=False, make_zlas=False,
+            overwrite=False, global_mapper=None, ezlas_exe=None):
+    if make_ecw:
+        make_tiff = True
+    if make_zlas:
+        make_laz = True
+    if not (make_tiff or make_laz):
+        raise ValueError("Select at least one imagery or point-cloud product")
+    if make_tiff and not ortho_source:
+        raise ValueError("Imagery source required for TIFF/ECW")
+    if make_laz and not cloud_source:
+        raise ValueError("LiDAR source required for LAZ/zLAS")
+
+    polygon = Path(aoi_path)
+    geom, crs = read_aoi(polygon)
+    entity = polygon.stem
+    if entity.lower().endswith("_polygon"):
+        entity = entity[:-8]
+    if not entity or entity in {".", ".."}:
+        raise ValueError("Invalid entity name")
+    stem = f"{entity}_2026_v1"
+    base = Path(output_root) / entity
+    qa = base / "QA" / "Converter"
+    qa.mkdir(parents=True, exist_ok=True)
+    results = {"mode": "AOI Converter", "aoi": str(polygon), "entity": entity,
+               "products": {}, "tile_index": None, "source_segments": None}
+
+    if make_tiff:
+        files = ortho.source_tiffs(Path(ortho_source))
+        _inventory, transform, res, bands = ortho.raster_inventory(files, crs)
+        bounds = ortho.align_bounds(geom.bounds, transform, res)
+        pixels = round((bounds[2] - bounds[0]) / res[0]) * round((bounds[3] - bounds[1]) / res[1])
+        if pixels > 150_000_000:
+            raise ValueError(
+                f"Single AOI is {pixels:,} pixels; this converter currently caps a TIFF at "
+                "150 million pixels to avoid running out of memory. Split or use blockwise processing."
+            )
+        tif = base / "TIFF" / f"{stem}.tif"
+        status, valid, coverage = ortho.export_tile(
+            stem, bounds, geom, files, tif, bands, crs, res, overwrite=overwrite)
+        if not tif.is_file() or tif.stat().st_size == 0:
+            raise RuntimeError(f"TIFF could not be produced ({status}) for {entity}")
+        results["products"]["TIFF"] = {"file": str(tif), "status": status, "coverage_pct": coverage}
+        if make_ecw:
+            gm = Path(global_mapper) if global_mapper else ortho.find_global_mapper()
+            if gm is None or not gm.is_file():
+                raise RuntimeError("Global Mapper not detected; ECW unavailable")
+            rgb_dir = qa / "gm_rgb_input"
+            pairs = ortho.prepare_gm_inputs([tif], rgb_dir)
+            out_pairs = ortho.run_global_mapper(
+                gm, pairs, base / "ECW", qa, compression=10,
+                workers=1, overwrite=overwrite)
+            ecw = out_pairs[0][1]
+            if not ecw.is_file() or ecw.stat().st_size == 0:
+                raise RuntimeError(f"ECW export failed for {entity}")
+            results["products"]["ECW"] = {"file": str(ecw), "status": "created"}
+
+    if make_laz:
+        lidar.validate_pdal_available()
+        files = lidar.source_clouds(Path(cloud_source))
+        inventory, point_crs, crs_meta = lidar.cloud_inventory(files, crs, qa)
+        chosen = lidar.intersecting_sources(geom, inventory)
+        if not chosen:
+            raise ValueError(f"No point-cloud coverage for AOI {entity}")
+        laz = base / "LAZ" / f"{stem}.laz"
+        if overwrite or not laz.is_file() or laz.stat().st_size == 0:
+            lidar.run_pdal_segment(SimpleNamespace(geometry=geom), chosen, laz, None, point_crs)
+            laz_status = "created"
+        else:
+            laz_status = "exists"
+        if not laz.is_file() or laz.stat().st_size == 0:
+            raise RuntimeError(f"LAZ export failed for {entity}")
+        results["products"]["LAZ"] = {"file": str(laz), "status": laz_status,
+                                       "vertical_crs": crs_meta.get("vertical_crs")}
+        if make_zlas:
+            ezlas = Path(ezlas_exe) if ezlas_exe else lidar.find_ezlas()
+            if not ezlas or not ezlas.is_file():
+                raise FileNotFoundError("EzLAS.exe is required for zLAS conversion")
+            zlas = base / "zLAS" / f"{stem}.zlas"
+            if overwrite or not zlas.is_file() or zlas.stat().st_size == 0:
+                temp_dir = qa / "temp_las_for_zlas"
+                temp_dir.mkdir(parents=True, exist_ok=True)
+                tmp_las = temp_dir / f"{stem}.las"
+                lidar.temp_las_from_existing_laz(laz, tmp_las, point_crs)
+                created = lidar.convert_zlas_batch(
+                    temp_dir, base / "zLAS", ezlas, [stem],
+                    lidar.horizontal_crs(point_crs), qa_dir=qa)
+                tmp_las.unlink(missing_ok=True)
+                if zlas not in created:
+                    raise RuntimeError(f"zLAS conversion or verification failed for {entity}")
+                zlas_status = "created"
+            else:
+                zlas_status = "exists"
+            results["products"]["zLAS"] = {"file": str(zlas), "status": zlas_status}
+
+    (qa / "execution.json").write_text(json.dumps(results, indent=2), encoding="utf-8")
+    print(f"DONE: AOI Converter {entity} -> {base}", flush=True)
+    return results
+
+
+def main():
+    ap = argparse.ArgumentParser(description="ATCO standalone AOI converter")
+    ap.add_argument("--aoi", type=Path, required=True)
+    ap.add_argument("--output-root", type=Path, required=True)
+    ap.add_argument("--ortho-source", type=Path)
+    ap.add_argument("--cloud-source", type=Path)
+    for p in ("tiff", "ecw", "laz", "zlas"):
+        ap.add_argument(f"--{p}", action="store_true")
+    ap.add_argument("--overwrite", action="store_true")
+    ap.add_argument("--global-mapper-exe", type=Path)
+    ap.add_argument("--ezlas-exe", type=Path)
+    args = ap.parse_args()
+    process(args.aoi, args.output_root,
+            ortho_source=args.ortho_source, cloud_source=args.cloud_source,
+            make_tiff=args.tiff, make_ecw=args.ecw,
+            make_laz=args.laz, make_zlas=args.zlas,
+            overwrite=args.overwrite, global_mapper=args.global_mapper_exe,
+            ezlas_exe=args.ezlas_exe)
+
+
+if __name__ == "__main__":
+    main()
