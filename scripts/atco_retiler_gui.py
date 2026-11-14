@@ -867,18 +867,18 @@ class RetilerApp(tk.Tk):
             page, "ATCO Retiler production workflow", bg=BG, color=MUTED
         ).pack(anchor="w", padx=18, pady=(0, 10))
         steps = (
-            ("1. Select source data",
-             "Use Data Sources or Browse on Build. Input must contain AOI, orthos and point_cloud as required by your selected products."),
-            ("2. Check project and revision",
-             "Confirm the detected circuit/revision, the approved central segment count and the AOI / Orthos / LiDAR readiness indicators."),
-            ("3. Select deliverables",
-             "Tick TIFF, ECW, LAZ, zLAS and/or Tile Index in Products & Progress. ECW selects TIFF; zLAS selects LAZ."),
-            ("4. Validate setup",
-             "Click Validate Setup and resolve missing tools or central data before processing. Check Global Mapper for ECW and EzLAS for zLAS."),
-            ("5. Run or recover",
-             "Process overwrites existing selected outputs after confirmation. Process Missing only fills missing products. Pause and Stop apply to active processing."),
+            ("1. Prepare local project data",
+             "Select the local Input folder containing aoi and the selected product sources: orthos for TIFF/ECW, point_cloud for LAZ/zLAS. The database on W: is used as a read-only geometry reference, not a list of remote files to choose."),
+            ("2. Select deliverables",
+             "Tick TIFF, ECW, LAZ, zLAS and/or Tile Index in Products & Progress. ECW requires TIFF; zLAS requires LAZ. Tile Index applies only to segmented circuits."),
+            ("3. Validate Input",
+             "Click Validate Input under the three source indicators in Project Setup. They remain grey before validation and turn green when their required source data and matching footprints pass. Unselected source types remain grey."),
+            ("4. Choose eligible entities",
+             "Only registered circuits or areas matched to local AOI and selected source coverage appear after validation. Select one or more entries; circuits use approved segments and areas use one approved polygon."),
+            ("5. Process or recover",
+             "Process overwrites selected existing outputs after confirmation. Process Missing fills gaps. Changing input or selected products requires revalidation before processing."),
             ("6. Review QA and deliver",
-             "Open QA & Reports and verify imagery extent/masks, ECW transparency, LAZ classifications, zLAS equivalence and Tile Index attributes."),
+             "Footprint validation does not prove every valid image pixel or LiDAR point is present. Review TIFF masks and seams, ECW appearance, LAZ classes, zLAS verification and circuit Tile Index attributes before delivery."),
         )
         for heading, description in steps:
             outer, inner = self.card(page)
