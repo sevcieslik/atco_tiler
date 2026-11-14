@@ -241,6 +241,8 @@ class RetilerApp(tk.Tk):
         self.entity_records = []
         self.aoi_options = []
         self._aoi_selection_initialized = False
+        self.input_validated = False
+        self.validating = False
         self.running = False
         self.paused = False
         self.process = None
@@ -518,7 +520,7 @@ class RetilerApp(tk.Tk):
             ("project", "▤   ACTIVE PROJECT", "Awaiting input", "Circuit / AOI revision"),
             ("sources", "▥   INPUT DATA", "—", "Ortho TIFFs + LiDAR files"),
             ("products", "◈   SELECTED PRODUCTS", "5", "TIFF · ECW · LAZ · zLAS · Index"),
-            ("segments", "▦   SEGMENTS", "—", "Tiles to process"),
+            ("segments", "▦   PROCESSING UNITS", "—", "Eligible tiles / areas"),
         )
         for i, (key, heading, value, hint) in enumerate(summaries):
             outer, inner = self.card(metrics)
@@ -565,12 +567,12 @@ class RetilerApp(tk.Tk):
         entity_header = tk.Frame(entity_area, bg=CARD)
         entity_header.pack(fill="x")
         self._dashboard_label(
-            entity_header, "Entities to process (Ctrl/Shift for multiple)",
+            entity_header, "Eligible entities after Validate (Ctrl/Shift for multiple)",
             size=9, color=MUTED).pack(side="left")
         tk.Button(entity_header, text="Select All", command=self._select_all_aois,
                   bg=ROW_BG, fg=TEXT, relief="flat", padx=9).pack(side="right")
         self.aoi_list = tk.Listbox(
-            entity_area, selectmode=tk.EXTENDED, exportselection=False, height=2,
+            entity_area, selectmode=tk.EXTENDED, exportselection=False, height=5,
             bg=NAV_2, fg=TEXT, selectbackground=GREEN_DARK,
             selectforeground="#ffffff", font=("Consolas", 10), relief="flat")
         self.aoi_list.pack(fill="x", expand=True, pady=(5, 0))
@@ -641,15 +643,15 @@ class RetilerApp(tk.Tk):
             self.exec_rows[product] = (pb, count, status)
 
         # Keep the established build callbacks and selected-product dependencies.
-        actions_outer, actions = self.card(page, "Build Controls")
+        actions_outer, actions = self.card(page, "Processing Controls")
         actions_outer.grid(row=2, column=1, sticky="nsew", padx=(6, 12), pady=6)
         actions.grid_columnconfigure(0, weight=1)
         actions.grid_columnconfigure(1, weight=1)
         self.run_btn = self._dashboard_button(
-            actions, "▶  Run Build", lambda: self.start_build(False), primary=True)
+            actions, "▶  Process", lambda: self.start_build(False), primary=True
         self.run_btn.grid(row=0, column=0, sticky="ew", padx=(14, 5), pady=(4, 7))
         self.rerun_btn = self._dashboard_button(
-            actions, "↻  Rerun Missing", lambda: self.start_build(True))
+            actions, "↻  Process Missing", lambda: self.start_build(True))
         self.rerun_btn.grid(row=0, column=1, sticky="ew", padx=(5, 14), pady=(4, 7))
         self.pause_btn = self._dashboard_button(actions, "⏸  Pause", self.toggle_pause)
         self.pause_btn.configure(state="disabled")
@@ -657,7 +659,7 @@ class RetilerApp(tk.Tk):
         self.stop_btn = self._dashboard_button(actions, "■  Stop", self.stop_build)
         self.stop_btn.configure(state="disabled")
         self.stop_btn.grid(row=1, column=1, sticky="ew", padx=(5, 14), pady=(0, 7))
-        self.validate_btn = self._dashboard_button(actions, "✓  Validate Setup", self.validate_setup)
+        self.validate_btn = self._dashboard_button(actions, "✓  Validate Input", self.validate_setup)
         self.validate_btn.grid(row=2, column=0, columnspan=2, sticky="ew",
                                padx=14, pady=(0, 12))
         tk.Frame(actions, bg=BORDER, height=1).grid(
@@ -669,7 +671,7 @@ class RetilerApp(tk.Tk):
         detail_rows = (
             ("Mode", "mode"),
             ("Selected products", "selected"),
-            ("Segments", "segments"),
+            ("Processing units", "segments"),
             ("Source TIFFs", "source_tiffs"),
             ("Source LiDAR files", "source_lidar"),
             ("Parallel workers", "workers"),
@@ -771,7 +773,7 @@ class RetilerApp(tk.Tk):
         if hasattr(self, "summary_values"):
             self.summary_values["products"].configure(text=str(selected))
         if hasattr(self, "run_btn") and not self.running:
-            state = "normal" if selected else "disabled"
+            state = "normal" if selected and self.input_validated and self.context else "disabled"
             self.run_btn.configure(state=state)
             self.rerun_btn.configure(state=state)
         self._refresh_build_details()
@@ -785,7 +787,10 @@ class RetilerApp(tk.Tk):
             self.product_vars["LAZ"].set(True)
         if changed == "LAZ" and not self.product_vars["LAZ"].get():
             self.product_vars["zLAS"].set(False)
-        self._sync_product_selection()
+        if hasattr(self, "input_validated") and self.input_validated:
+            self._invalidate_input_validation()
+        else:
+            self._sync_product_selection()
 
     # ---------- Mapping page ----------
     def _build_mapping_page(self):
@@ -950,7 +955,7 @@ class RetilerApp(tk.Tk):
         self.entity_records = []
         selected = self.selected_aois()
         if not selected:
-            self.context_label.configure(text="Select one or more registered entities")
+            self.context_label.configure(text="Select one or more eligible entities")
         else:
             try:
                 sys.path.insert(0, str(MODULES))
@@ -983,7 +988,7 @@ class RetilerApp(tk.Tk):
                 first = self.entity_records[0]
                 self.context = (first["entity"], first["revision"])
                 self.context_label.configure(
-                    text=f"{len(self.entity_records)} registered entity(s) | "
+                    text=f"{len(self.entity_records)} eligible entity(s) | "
                          + ", ".join(f"{r['entity']} ({r['kind']})"
                                      for r in self.entity_records[:5]))
             except Exception as exc:
@@ -1009,84 +1014,87 @@ class RetilerApp(tk.Tk):
         self.refresh_product_status()
 
     def refresh_mapping(self):
-        self.input_entry.delete(0,"end")
+        """Map local inputs only. Never enumerate remote registry entries here."""
+        self.input_entry.delete(0, "end")
         self.input_entry.insert(0, human_path(self.input_root))
-        self.output_entry.delete(0,"end")
+        self.output_entry.delete(0, "end")
         self.output_entry.insert(0, human_path(self.output_root))
-
-        if self.input_root and self.input_root.is_dir():
-            self.mapped = core.map_input(self.input_root)
-        else:
-            self.mapped = {"aoi":None,"orthos":None,"point_cloud":None}
-
+        self.mapped = (core.map_input(self.input_root)
+                       if self.input_root and self.input_root.is_dir()
+                       else {"aoi": None, "orthos": None, "point_cloud": None})
         for w in self.mapping_chip_frame.winfo_children():
             w.destroy()
-        for key,label in (("aoi","AOI"),("orthos","Orthos"),("point_cloud","Point Cloud (LiDAR)")):
+        for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
+                           ("point_cloud", "Point Cloud (LiDAR)")):
             ok = self.mapped.get(key) is not None
-            self.badge(self.mapping_chip_frame, f"{'●' if ok else '○'}  {label}", "ok" if ok else "bad").pack(side="top", anchor="w", pady=3)
-
+            self.badge(self.mapping_chip_frame,
+                       f"{'●' if ok else '○'}  {label}",
+                       "ok" if ok else "bad").pack(side="top", anchor="w", pady=3)
         for w in self.mapping_detail.winfo_children():
             w.destroy()
-        for key,label in (("aoi","AOI"),("orthos","Orthos"),("point_cloud","Point Cloud")):
+        for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
+                           ("point_cloud", "Point Cloud")):
             p = self.mapped.get(key)
-            row = tk.Frame(self.mapping_detail,bg=CARD); row.pack(fill="x",pady=5)
+            row = tk.Frame(self.mapping_detail, bg=CARD)
+            row.pack(fill="x", pady=5)
             self.badge(row, "OK" if p else "MISSING", "ok" if p else "bad").pack(side="left")
-            tk.Label(row,text=label,width=16,anchor="w",bg=CARD,fg=TEXT,font=("Segoe UI",10,"bold")).pack(side="left",padx=10)
-            tk.Label(row,text=str(p or "Not mapped"),anchor="w",bg=CARD,fg=MUTED,font=("Segoe UI",9)).pack(side="left",fill="x",expand=True)
-
-        # Show circuit polygons from Input/AOI plus registered Telecom/Substations
-        # from the same central SQLite database, with no operator mode switch.
-        previous = {str(item["path"]) for item in self.selected_aois()} if self.aoi_options else set()
-        self.aoi_options = []
-        self.aoi_list.delete(0, "end")
-        try:
-            from central_aoi_catalogue import get_standalone_records
-            from aoi_batch import discover_aois
-            import process_orthos as po
-            local_aois = []
-            if self.mapped.get("aoi"):
-                try:
-                    local_aois = discover_aois(self.mapped["aoi"], converter=False)
-                except FileNotFoundError:
-                    # Registered area entities remain selectable even when
-                    # there are no local circuit polygons.
-                    pass
-            for shp in local_aois:
-                self.aoi_options.append({
-                    "kind": "circuit", "entity": po.circuit_from_polygon(shp),
-                    "path": shp, "has_segments": True,
-                })
-            self.aoi_options += get_standalone_records()
-            for item in self.aoi_options:
-                label = f"{item['entity']}  [{item['kind']}]"
-                self.aoi_list.insert("end", label + "    |    " + str(item["path"]))
-            chosen = [i for i, item in enumerate(self.aoi_options)
-                      if str(item["path"]) in previous]
-            if not self._aoi_selection_initialized and not chosen:
-                # Never auto-select every registered substation and telecom.
-                # Choose at most the first local circuit; the operator opts in
-                # to extra entities explicitly.
-                first_local = next((i for i, item in enumerate(self.aoi_options)
-                                    if item["has_segments"]), None)
-                chosen = [first_local] if first_local is not None else []
-            for idx in chosen:
-                self.aoi_list.selection_set(idx)
-            self._aoi_selection_initialized = True
-        except FileNotFoundError as exc:
-            self.log(f"AOI discovery: {exc}", "WARN")
-        except Exception as exc:
-            self.log(f"Central AOI catalogue: {exc}", "WARN")
-        self._update_aoi_context()
-
+            tk.Label(row, text=label, width=16, anchor="w", bg=CARD, fg=TEXT,
+                     font=("Segoe UI", 10, "bold")).pack(side="left", padx=10)
+            tk.Label(row, text=str(p or "Not mapped"), anchor="w", bg=CARD, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
+        self._invalidate_input_validation()
         self._count_source_files()
         if hasattr(self, "summary_values"):
-            self.summary_values["project"].configure(
-                text=f"{len(self.entity_records)} entities" if len(self.entity_records) > 1
-                else (f"{self.context[0]} / {self.context[1]}" if self.context else "Awaiting input"))
             self.summary_values["sources"].configure(
                 text=f"{self.source_tiff_count} + {self.source_lidar_count}")
-            self.summary_values["segments"].configure(
-                text=str(len(self.blocks)) if self.blocks else "—")
+        self.refresh_product_status()
+
+    def _invalidate_input_validation(self):
+        self.input_validated = False
+        self.context = None
+        self.blocks = []
+        self.cloud_blocks = []
+        self.entity_records = []
+        self.aoi_options = []
+        self.aoi_list.configure(state="normal")
+        self.aoi_list.delete(0, "end")
+        self.context_label.configure(text="Select local input, then Validate Input to find eligible entities")
+        self.product_vars["Tile Index"].set(False)
+        self.product_checks["Tile Index"].configure(state="disabled")
+        self._sync_product_selection()
+        if hasattr(self, "summary_values"):
+            self.summary_values["project"].configure(text="Awaiting validation")
+            self.summary_values["segments"].configure(text="—")
+
+    def _apply_eligible_entities(self, eligible, excluded):
+        """Called on the UI thread after spatial checks complete."""
+        self.validating = False
+        self.validate_btn.configure(state="normal", text="✓  Validate Input")
+        self.aoi_options = list(eligible)
+        self.aoi_list.delete(0, "end")
+        for item in eligible:
+            self.aoi_list.insert(
+                "end", f"{item['entity']}  [{item['kind']}]  {item['revision']}")
+        if eligible:
+            self.input_validated = True
+            self.aoi_list.selection_set(0)
+            self._update_aoi_context()
+            self.log(f"VALIDATION: {len(eligible)} eligible entities; "
+                     f"{len(excluded)} excluded. Footprint coverage is not pixel QA.", "INFO")
+            for name, reason in excluded:
+                self.log(f"Excluded {name}: {reason}", "WARN")
+            messagebox.showinfo(APP_NAME,
+                f"Input validated. {len(eligible)} eligible entities found.\n"
+                "Choose the entities to process.\n\n"
+                "Coverage uses spatial footprints; output QA still applies.")
+        else:
+            self._invalidate_input_validation()
+            self.log(f"VALIDATION: 0 eligible entities; {len(excluded)} exclusions.", "WARN")
+            for name, reason in excluded:
+                self.log(f"Excluded {name}: {reason}", "WARN")
+            messagebox.showwarning(APP_NAME,
+                "No circuit or area has sufficient matching local AOI and "
+                "source coverage. Check Activity Log.")
         self.refresh_product_status()
 
     def has_segmented_entities(self):
@@ -1215,7 +1223,9 @@ class RetilerApp(tk.Tk):
     def start_build(self, rerun):
         if self.running:
             return
-        self.refresh_mapping()
+        if not self.input_validated:
+            messagebox.showwarning(APP_NAME, "Run Validate Input before processing.")
+            return
         selected = self.selected_products()
         if not selected:
             messagebox.showwarning(APP_NAME, "Select at least one product to build.")
@@ -1655,6 +1665,13 @@ class RetilerApp(tk.Tk):
                 if kind == "LINE":
                     self.log(payload,"INFO")
                     self._parse_progress(payload)
+                elif kind == "ELIGIBLE":
+                    self._apply_eligible_entities(*payload)
+                elif kind == "VALIDATE_FAIL":
+                    self.validating = False
+                    self.validate_btn.configure(state="normal", text="✓  Validate Input")
+                    self.log(f"Validation failed: {payload}", "ERROR")
+                    messagebox.showerror(APP_NAME, f"Input validation failed:\\n\\n{payload}")
                 elif kind == "ENTITY_DONE":
                     self.log(f"Completed entity: {payload}", "INFO")
                     self.refresh_product_status()
@@ -1702,49 +1719,51 @@ class RetilerApp(tk.Tk):
 
     # ---------- validation/settings/QA ----------
     def validate_setup(self):
-        """Validate only dependencies needed by selected workflow/products."""
-        self.log("Validating selected entities, runtime and sources...", "INFO")
-        checks = []
+        """Discover processing eligibility exclusively from local input coverage."""
+        if self.running or self.validating:
+            return
+        self._invalidate_input_validation()
         selected = self.selected_products()
-        checks.append(("Central AOI DB",
-                       (core.CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite").is_file()))
-        if self.has_segmented_entities():
-            checks.append(("Central Segments",
-                           (core.CENTRAL_ROOT / "segments" / "circuit").is_dir()))
-        checks.append(("AOI selected / valid", bool(self.entity_records)))
-        needs_ortho = any(p in selected for p in ("TIFF", "ECW"))
-        needs_lidar = any(p in selected for p in ("LAZ", "zLAS"))
-        if needs_ortho:
-            checks.append(("Input/Orthos", self.mapped.get("orthos") is not None))
-        if needs_lidar:
-            checks.append(("Input/Point Cloud", self.mapped.get("point_cloud") is not None))
-            from ensure_lidar_support import pdal_ready, find_conda
-            if pdal_ready():
-                self.log("OK  PDAL CLI is installed", "INFO")
-            else:
-                try:
-                    found_conda = find_conda()
-                    self.log(
-                        f"OPTIONAL  PDAL not installed; will download automatically "
-                        f"to scripts\\.venv on first LiDAR build (Conda: {found_conda})",
-                        "WARN")
-                except (OSError, ValueError) as exc:
-                    checks.append((
-                        f"Conda required to auto-install PDAL ({exc})", False))
-        if "ECW" in selected:
-            checks.append(("Global Mapper", core.detect_global_mapper(self.cfg) is not None))
-        if "zLAS" in selected:
-            checks.append(("EzLAS.exe", EZLAS.is_file()))
-        bad = []
-        for name, ok in checks:
-            self.log(f"{'OK' if ok else 'MISSING'}  {name}", "INFO" if ok else "WARN")
-            if not ok:
-                bad.append(name)
-        if bad:
-            messagebox.showwarning(
-                APP_NAME, "Validation completed with missing requirements:\n\n" + "\n".join(bad))
-        else:
-            messagebox.showinfo(APP_NAME, "Validation passed for selected entities and products.")
+        if not selected:
+            messagebox.showwarning(APP_NAME, "Select at least one product before validation.")
+            return
+        if not self.mapped.get("aoi"):
+            messagebox.showwarning(APP_NAME, "Input/aoi with polygon geometries is required.")
+            return
+        if any(p in selected for p in ("TIFF", "ECW")) and not self.mapped.get("orthos"):
+            messagebox.showwarning(APP_NAME, "Input/orthos is missing.")
+            return
+        if any(p in selected for p in ("LAZ", "zLAS")) and not self.mapped.get("point_cloud"):
+            messagebox.showwarning(APP_NAME, "Input/point_cloud is missing.")
+            return
+        self.validating = True
+        self.validate_btn.configure(state="disabled", text="Checking coverage...")
+        self.log("VALIDATE: indexing local AOI, image footprints, and LiDAR footprints "
+                 "against central AOI revisions...", "INFO")
+        mapped = dict(self.mapped)
+        threading.Thread(
+            target=self._eligibility_worker,
+            args=(mapped, list(selected)), daemon=True).start()
+
+    def _eligibility_worker(self, mapped, selected):
+        try:
+            from input_eligibility import discover_eligible
+            pdal_exe = None
+            if any(p in selected for p in ("LAZ", "zLAS")):
+                from ensure_lidar_support import pdal_executable, pdal_ready
+                if not pdal_ready():
+                    # LiDAR is optional for install, but a reliable spatial
+                    # preflight must not guess LAS/LAZ extents.
+                    raise RuntimeError(
+                        "PDAL is required to validate LiDAR coverage. "
+                        "Deselect LAZ/zLAS for an imagery-only validation, or "
+                        "install LiDAR support once.")
+                pdal_exe = pdal_executable()
+            eligible, excluded = discover_eligible(
+                mapped, selected, pdal_exe=pdal_exe)
+            self.log_queue.put(("ELIGIBLE", (eligible, excluded)))
+        except Exception as exc:
+            self.log_queue.put(("VALIDATE_FAIL", str(exc)))
 
     def save_settings(self):
         try:
