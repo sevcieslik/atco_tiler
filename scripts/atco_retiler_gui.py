@@ -373,7 +373,7 @@ class RetilerApp(tk.Tk):
         ]
         for label, icon in items:
             btn = tk.Button(
-                self.sidebar, text=f"  {icon}   {label}", anchor="w",
+                self.sidebar, text=f"  {icon}   {'Process' if label == 'Build' else label}", anchor="w",
                 relief="flat", bd=0, bg=NAV, fg="#eef3f6",
                 activebackground="#263642", activeforeground="white",
                 font=("Segoe UI", 11), padx=12, pady=13,
@@ -873,7 +873,7 @@ class RetilerApp(tk.Tk):
             ("4. Validate setup",
              "Click Validate Setup and resolve missing tools or central data before processing. Check Global Mapper for ECW and EzLAS for zLAS."),
             ("5. Run or recover",
-             "Run Build overwrites existing selected outputs after confirmation. Rerun Missing only fills missing products. Pause and Stop apply to active builds."),
+             "Process overwrites existing selected outputs after confirmation. Process Missing only fills missing products. Pause and Stop apply to active processing."),
             ("6. Review QA and deliver",
              "Open QA & Reports and verify imagery extent/masks, ECW transparency, LAZ classifications, zLAS equivalence and Tile Index attributes."),
         )
@@ -1281,7 +1281,7 @@ class RetilerApp(tk.Tk):
         self.paused = False
         self.stop_requested = False
         self.suspended_pids = []
-        self.build_mode = "Rerun Missing" if rerun else "Full Build"
+        self.build_mode = "Process Missing" if rerun else "Process All"
         self.current_stage = "Starting"
         self.build_start_time = time.time()
         self.build_elapsed_final = 0.0
@@ -1292,7 +1292,7 @@ class RetilerApp(tk.Tk):
         self.status_text.configure(text="Running")
         self.status_dot.configure(fg=BLUE)
         self.session_created = {k: 0 for k in self.session_created}
-        self.log(f"{'RERUN MISSING' if rerun else 'FULL BUILD'} - {self.context[0]} / {self.context[1]}", "INFO")
+        self.log(f"{'PROCESS MISSING' if rerun else 'PROCESS ALL'} - {self.context[0]} / {self.context[1]}", "INFO")
 
         records = list(self.entity_records)
         input_sources = dict(self.mapped)
@@ -1712,15 +1712,15 @@ class RetilerApp(tk.Tk):
         self._sync_product_selection()
         self.pause_btn.configure(state="disabled", text="⏸  Pause")
         self.stop_btn.configure(state="disabled")
-        self.status_text.configure(text="Stopped" if stopped else ("Ready" if ok else "Build failed"))
+        self.status_text.configure(text="Stopped" if stopped else ("Ready" if ok else "Processing failed"))
         self.status_dot.configure(fg=AMBER if stopped else ("#48bd54" if ok else RED))
         self.refresh_product_status()
         if stopped:
             messagebox.showinfo(APP_NAME, "Build stopped. Completed products were kept; temporary/zero-byte files were cleaned.")
         elif ok:
-            messagebox.showinfo(APP_NAME, "Build finished.")
+            messagebox.showinfo(APP_NAME, "Processing finished.")
         else:
-            messagebox.showerror(APP_NAME, "Build failed. Check the log and QA diagnostics.")
+            messagebox.showerror(APP_NAME, "Processing failed. Check the log and QA diagnostics.")
 
     # ---------- validation/settings/QA ----------
     def validate_setup(self):
