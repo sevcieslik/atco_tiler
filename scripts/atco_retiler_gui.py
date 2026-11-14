@@ -759,11 +759,16 @@ class RetilerApp(tk.Tk):
             self.log_toggle_btn.configure(text="Show Details ▼")
 
     def set_all_products(self, selected):
-        if self.running:
+        if self.running or self.validating:
             return
+        before = tuple(self.selected_products())
         for name, value in self.product_vars.items():
             value.set(bool(selected) and (name != "Tile Index" or self.has_segmented_entities()))
-        self._sync_product_selection()
+        if self.input_validated and tuple(self.selected_products()) != before:
+            # Eligibility was checked for a different set of required sources.
+            self._invalidate_input_validation()
+        else:
+            self._sync_product_selection()
 
     def _sync_product_selection(self):
         selected = len(self.selected_products())
