@@ -280,7 +280,8 @@ def product_status(input_root,mapped):
     aoi_rec = ortho.load_aoi_revision(circuit, polygon)
     _, seg = ortho.load_segments(circuit, aoi_rec['revision_code'])
     seg = enrich_segments(seg, circuit) if 'DeliveryName' not in seg.columns else seg
-    blocks = [str(v) for v in seg['DeliveryName'].tolist()]
+    blocks = [str(v) for v in seg['ImageryName'].tolist()]
+    cloud_blocks = [str(v) for v in seg['PointCloudName'].tolist()]
     base = output_base(default_output_root(input_root), circuit)
     migrate_legacy_qa(base)
 
@@ -293,8 +294,8 @@ def product_status(input_root,mapped):
     missing = {
         'TIFF': [b for b in blocks if not ok(base/'TIFF'/f'{b}.tif')],
         'ECW': [b for b in blocks if not ok(base/'ECW'/f'{b}.ecw')],
-        'LAZ': [b for b in blocks if not ok(base/'LAZ'/f'{b}.laz')],
-        'zLAS': [b for b in blocks if not ok(base/'zLAS'/f'{b}.zlas')],
+        'LAZ': [b for b in cloud_blocks if not ok(base/'LAZ'/f'{b}.laz')],
+        'zLAS': [b for b in cloud_blocks if not ok(base/'zLAS'/f'{b}.zlas')],
     }
     tile_shp = tile_index_shp_path(base, circuit)
     shp_ok = ok(tile_shp) and tile_shp.with_suffix('.dbf').is_file() and tile_shp.with_suffix('.shx').is_file()
