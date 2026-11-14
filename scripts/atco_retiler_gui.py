@@ -975,6 +975,7 @@ class RetilerApp(tk.Tk):
                         "path": shp, "entity": entity, "revision": revision,
                         "imagery": imagery, "cloud": cloud,
                         "has_segments": item["has_segments"], "kind": item["kind"],
+                        "layer": item.get("layer"), "source_ref": item.get("source_ref"),
                     }
                     self.entity_records.append(record)
                     self.blocks.extend(imagery)
@@ -1321,6 +1322,7 @@ class RetilerApp(tk.Tk):
                         sys.executable, str(MODULES / "process_aoi_converter.py"),
                         "--aoi", aoi, "--entity", record["entity"],
                         "--revision", record["revision"],
+                        * (["--aoi-layer", record["layer"]] if record.get("layer") else []),
                         "--output-root", str(output_root), *overwrite,
                     ]
                     if any(p in products for p in ("TIFF", "ECW")):
