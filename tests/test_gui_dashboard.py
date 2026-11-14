@@ -39,16 +39,25 @@ class DashboardSmokeTests(unittest.TestCase):
         self.app.destroy()
 
     def test_build_dashboard_starts_with_selectable_products(self):
-        self.assertEqual(APP_VERSION, "1.07")
+        self.assertEqual(APP_VERSION, "1.08-dev")
         self.assertEqual(set(self.app.product_checks), {"TIFF", "ECW", "LAZ", "zLAS", "Tile Index"})
         self.assertEqual(len(self.app.exec_rows), 5)
+        self.assertTrue(hasattr(self.app, "aoi_list"))
+        self.assertFalse(hasattr(self.app, "process_mode"))
         self.assertEqual(len(self.app.selected_products()), 5)
         self.assertIn("Build", self.app.pages)
         self.assertIn("Data Sources", self.app.pages)
         self.assertIn("QA & Reports", self.app.pages)
         self.assertIn("How to Start", self.app.pages)
         self.assertTrue(self.app.commit_badge["text"].startswith("Commit"))
-        self.assertEqual(str(self.app.run_btn["state"]), "normal")
+        self.assertEqual(str(self.app.run_btn["state"]), "disabled")
+
+    def test_processing_requires_local_validation(self):
+        self.assertFalse(self.app.input_validated)
+        self.assertEqual(self.app.aoi_list.size(), 0)
+        self.assertEqual(self.app.run_btn["text"], "▶  Process")
+        self.assertEqual(self.app.validate_btn["text"], "✓  Validate Input")
+        self.assertEqual(self.app.run_btn["state"], "disabled")
 
     def test_select_all_and_dependencies(self):
         self.app.set_all_products(False)
@@ -57,12 +66,13 @@ class DashboardSmokeTests(unittest.TestCase):
         self.app.product_vars["ECW"].set(True)
         self.app._enforce_product_dependencies("ECW")
         self.assertTrue(self.app.product_vars["TIFF"].get())
-        self.assertEqual(str(self.app.run_btn["state"]), "normal")
+        self.assertEqual(str(self.app.run_btn["state"]), "disabled")
         self.app.product_vars["TIFF"].set(False)
         self.app._enforce_product_dependencies("TIFF")
         self.assertFalse(self.app.product_vars["ECW"].get())
         self.app.set_all_products(True)
-        self.assertEqual(len(self.app.selected_products()), 5)
+        # Index is only available when at least one selected entity has segments.
+        self.assertEqual(len(self.app.selected_products()), 4)
         self.app.product_vars["LAZ"].set(False)
         self.app._enforce_product_dependencies("LAZ")
         self.assertFalse(self.app.product_vars["zLAS"].get())
@@ -84,6 +94,28 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertEqual(self.app.pause_btn["text"], "▶  Resume")
         self.app.pause_btn.configure(state="disabled")
         self.assertEqual(self.app.pause_btn["state"], "disabled")
+
+    def test_validate_control_is_beside_sources_and_badges_are_gated(self):
+        self.app.refresh_mapping()
+        self.assertEqual(self.app.validate_btn.winfo_manager(), "grid")
+        self.assertEqual(int(self.app.validate_btn.grid_info()["row"]), 2)
+        self.assertEqual(int(self.app.validate_btn.grid_info()["column"]), 3)
+        self.assertEqual(
+            self.app.input_badge_states,
+            {"aoi": "pending", "orthos": "pending", "point_cloud": "pending"})
+        self.assertTrue(all(
+            child["text"].startswith("○")
+            for child in self.app.mapping_chip_frame.winfo_children()))
+        self.app._set_input_badges({
+            "aoi": "validated", "orthos": "validated",
+            "point_cloud": "validated"})
+        self.assertTrue(all(
+            child["text"].startswith("●")
+            for child in self.app.mapping_chip_frame.winfo_children()))
+        self.app._invalidate_input_validation()
+        self.assertTrue(all(
+            child["text"].startswith("○")
+            for child in self.app.mapping_chip_frame.winfo_children()))
 
     def test_readiness_lights_are_vertical(self):
         self.app.refresh_mapping()

@@ -48,8 +48,8 @@ if not defined CONDA_BAT goto :missing_conda
 echo.
 echo ATCO runtime: %ENV_DIR%
 echo Conda executable: %CONDA_BAT%
-echo Creating isolated Python 3.11 GIS runtime. System Python is unchanged.
-call "%CONDA_BAT%" create --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas shapely pyproj rasterio numpy pandas pyarrow pdal libpdal
+echo Creating lightweight ATCO imagery runtime (Python 3.11). LiDAR is optional.
+call "%CONDA_BAT%" create --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
 if errorlevel 1 goto :fail
 >"config\runtime_env.txt" echo %ENV_DIR%
 goto :validate_final
@@ -67,7 +67,7 @@ if not defined CONDA_BAT goto :missing_conda
 echo.
 echo Repairing ATCO runtime at %ENV_DIR% ...
 echo Using Conda: %CONDA_BAT%
-call "%CONDA_BAT%" install --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas shapely pyproj rasterio numpy pandas pyarrow pdal libpdal
+call "%CONDA_BAT%" install --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
 if errorlevel 1 goto :fail
 
 :validate_final
@@ -79,6 +79,7 @@ if errorlevel 1 goto :fail
 :ready
 echo.
 echo ATCO runtime is ready.
+echo To enable LAZ/zLAS, run INSTALL_LIDAR_SUPPORT.bat first.
 echo EzLAS expected at: %~dp0tools\EzLAS\EzLAS.exe
 if not exist "%~dp0tools\EzLAS\EzLAS.exe" echo NOTE: copy EzLAS.exe there before zLAS modes.
 echo.

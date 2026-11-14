@@ -25,9 +25,10 @@ DOCS = TOOL_ROOT / "docs"
 
 sys.path.insert(0, str(TOOL_ROOT))
 import atco_processor as core
+from atco_delivery import product_folder
 
 APP_NAME = "ATCO Retiler"
-APP_VERSION = "1.07"
+APP_VERSION = "1.08-dev"
 
 
 def current_commit():
@@ -236,6 +237,12 @@ class RetilerApp(tk.Tk):
         self.mapped = {"aoi": None, "orthos": None, "point_cloud": None}
         self.context = None
         self.blocks = []
+        self.cloud_blocks = []
+        self.entity_records = []
+        self.aoi_options = []
+        self._aoi_selection_initialized = False
+        self.input_validated = False
+        self.validating = False
         self.running = False
         self.paused = False
         self.process = None
@@ -357,6 +364,7 @@ class RetilerApp(tk.Tk):
         self.nav_buttons = {}
         items = [
             ("Build", "▶"),
+            ("Activity Log", "▤"),
             ("Data Sources", "▧"),
             ("Settings", "⚙"),
             ("QA & Reports", "▥"),
@@ -365,7 +373,7 @@ class RetilerApp(tk.Tk):
         ]
         for label, icon in items:
             btn = tk.Button(
-                self.sidebar, text=f"  {icon}   {label}", anchor="w",
+                self.sidebar, text=f"  {icon}   {'Process' if label == 'Build' else label}", anchor="w",
                 relief="flat", bd=0, bg=NAV, fg="#eef3f6",
                 activebackground="#263642", activeforeground="white",
                 font=("Segoe UI", 11), padx=12, pady=13,
@@ -394,6 +402,7 @@ class RetilerApp(tk.Tk):
 
         self.pages = {}
         self.pages["Build"] = self._build_build_page()
+        self.pages["Activity Log"] = self._build_log_page()
         self.pages["Data Sources"] = self._build_mapping_page()
         self.pages["Settings"] = self._build_settings_page()
         self.pages["QA & Reports"] = self._build_qa_page()
@@ -511,7 +520,7 @@ class RetilerApp(tk.Tk):
             ("project", "▤   ACTIVE PROJECT", "Awaiting input", "Circuit / AOI revision"),
             ("sources", "▥   INPUT DATA", "—", "Ortho TIFFs + LiDAR files"),
             ("products", "◈   SELECTED PRODUCTS", "5", "TIFF · ECW · LAZ · zLAS · Index"),
-            ("segments", "▦   SEGMENTS", "—", "Tiles to process"),
+            ("segments", "▦   PROCESSING UNITS", "—", "Eligible tiles / areas"),
         )
         for i, (key, heading, value, hint) in enumerate(summaries):
             outer, inner = self.card(metrics)
@@ -550,6 +559,31 @@ class RetilerApp(tk.Tk):
                                 padx=16, pady=(0, 7))
         self._dashboard_button(setup, "Open Output", self.open_output).grid(
             row=2, column=2, sticky="e", padx=(8, 6), pady=(0, 7))
+        # Validation is part of local input setup, directly below its three
+        # readiness indicators; status stays grey until validation succeeds.
+        self.validate_btn = self._dashboard_button(
+            setup, "✓  Validate Input", self.validate_setup)
+        self.validate_btn.grid(row=2, column=3, sticky="ew",
+                               padx=(18, 14), pady=(0, 7))
+
+        # Entity selection belongs to Project Setup, not a second mode section.
+        entity_area = tk.Frame(setup, bg=CARD)
+        entity_area.grid(row=3, column=0, columnspan=4, sticky="ew",
+                         padx=16, pady=(3, 12))
+        entity_header = tk.Frame(entity_area, bg=CARD)
+        entity_header.pack(fill="x")
+        self._dashboard_label(
+            entity_header, "Eligible entities after Validate (Ctrl/Shift for multiple)",
+            size=9, color=MUTED).pack(side="left")
+        tk.Button(entity_header, text="Select All", command=self._select_all_aois,
+                  bg=ROW_BG, fg=TEXT, relief="flat", padx=9).pack(side="right")
+        self.aoi_list = tk.Listbox(
+            entity_area, selectmode=tk.EXTENDED, exportselection=False, height=5,
+            bg=NAV_2, fg=TEXT, selectbackground=GREEN_DARK,
+            selectforeground="#ffffff", font=("Consolas", 10), relief="flat")
+        self.aoi_list.pack(fill="x", expand=True, pady=(5, 0))
+        self.aoi_list.bind("<<ListboxSelect>>",
+                           lambda _event: self._update_aoi_context())
 
         # Progress table: checkboxes are the authoritative product selectors.
         progress_outer, progress = self.card(page, "Products & Progress")
@@ -615,15 +649,15 @@ class RetilerApp(tk.Tk):
             self.exec_rows[product] = (pb, count, status)
 
         # Keep the established build callbacks and selected-product dependencies.
-        actions_outer, actions = self.card(page, "Build Controls")
+        actions_outer, actions = self.card(page, "Processing Controls")
         actions_outer.grid(row=2, column=1, sticky="nsew", padx=(6, 12), pady=6)
         actions.grid_columnconfigure(0, weight=1)
         actions.grid_columnconfigure(1, weight=1)
         self.run_btn = self._dashboard_button(
-            actions, "▶  Run Build", lambda: self.start_build(False), primary=True)
+            actions, "▶  Process", lambda: self.start_build(False), primary=True)
         self.run_btn.grid(row=0, column=0, sticky="ew", padx=(14, 5), pady=(4, 7))
         self.rerun_btn = self._dashboard_button(
-            actions, "↻  Rerun Missing", lambda: self.start_build(True))
+            actions, "↻  Process Missing", lambda: self.start_build(True))
         self.rerun_btn.grid(row=0, column=1, sticky="ew", padx=(5, 14), pady=(4, 7))
         self.pause_btn = self._dashboard_button(actions, "⏸  Pause", self.toggle_pause)
         self.pause_btn.configure(state="disabled")
@@ -631,19 +665,16 @@ class RetilerApp(tk.Tk):
         self.stop_btn = self._dashboard_button(actions, "■  Stop", self.stop_build)
         self.stop_btn.configure(state="disabled")
         self.stop_btn.grid(row=1, column=1, sticky="ew", padx=(5, 14), pady=(0, 7))
-        self.validate_btn = self._dashboard_button(actions, "✓  Validate Setup", self.validate_setup)
-        self.validate_btn.grid(row=2, column=0, columnspan=2, sticky="ew",
-                               padx=14, pady=(0, 12))
         tk.Frame(actions, bg=BORDER, height=1).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=14)
+            row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(8, 0))
         details = tk.Frame(actions, bg=CARD)
-        details.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=14, pady=(8, 6))
+        details.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=14, pady=(8, 6))
         details.grid_columnconfigure(1, weight=1)
         self.detail_values = {}
         detail_rows = (
             ("Mode", "mode"),
             ("Selected products", "selected"),
-            ("Segments", "segments"),
+            ("Processing units", "segments"),
             ("Source TIFFs", "source_tiffs"),
             ("Source LiDAR files", "source_lidar"),
             ("Parallel workers", "workers"),
@@ -665,14 +696,23 @@ class RetilerApp(tk.Tk):
         log_head = tk.Frame(log_panel, bg=CARD)
         log_head.pack(fill="x", padx=13, pady=(10, 7))
         self._dashboard_label(log_head, "▸  Activity Log", size=11, bold=True).pack(side="left")
+        self._dashboard_label(log_head, "Full-screen log available on the left",
+                              size=9, color=MUTED).pack(side="left", padx=14)
         self.log_toggle_btn = self._dashboard_button(
             log_head, "Show Details ▼", self.toggle_log_details)
         self.log_toggle_btn.pack(side="right")
         self._dashboard_button(log_head, "Open QA Folder", self.open_qa_folder).pack(side="right", padx=(0, 7))
         self._dashboard_button(log_head, "Clear", self.clear_log).pack(side="right", padx=(0, 7))
-        self.log_text = tk.Text(log_panel, height=3, bg=LOG_BG, fg=LOG_TEXT,
-                                insertbackground=TEXT, relief="flat",
-                                font=("Consolas", 9), padx=10, pady=7, wrap="none")
+        log_view = tk.Frame(log_panel, bg=LOG_BG)
+        log_view.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+        self.log_scroll = ttk.Scrollbar(log_view, orient="vertical")
+        self.log_scroll.pack(side="right", fill="y")
+        self.log_text = tk.Text(
+            log_view, height=12, bg=LOG_BG, fg=LOG_TEXT,
+            insertbackground=TEXT, relief="flat", font=("Consolas", 10),
+            padx=10, pady=8, wrap="word",
+            yscrollcommand=self.log_scroll.set)
+        self.log_scroll.configure(command=self.log_text.yview)
         # Log remains hidden until the operator explicitly expands it.
         self.log_text.pack_forget()
         self.log_text.tag_configure("INFO", foreground="#82d7a0")
@@ -683,21 +723,55 @@ class RetilerApp(tk.Tk):
         self._sync_product_selection()
         return viewport
 
+    def _build_log_page(self):
+        """Full-width searchable/scrollable diagnostics without dashboard clipping."""
+        page = tk.Frame(self.content_wrap, bg=BG)
+        head = tk.Frame(page, bg=BG)
+        head.pack(fill="x", padx=20, pady=(18, 10))
+        tk.Label(head, text="Activity Log", bg=BG, fg=TEXT,
+                 font=("Segoe UI", 18, "bold")).pack(side="left")
+        tk.Button(head, text="Clear", command=self.clear_log,
+                  bg=ROW_BG, fg=TEXT, relief="flat", padx=14, pady=8).pack(side="right")
+        box = tk.Frame(page, bg=LOG_BG, highlightthickness=1,
+                       highlightbackground=BORDER)
+        box.pack(fill="both", expand=True, padx=20, pady=(0, 18))
+        vertical = ttk.Scrollbar(box, orient="vertical")
+        vertical.pack(side="right", fill="y")
+        horizontal = ttk.Scrollbar(box, orient="horizontal")
+        horizontal.pack(side="bottom", fill="x")
+        self.log_full_text = tk.Text(
+            box, bg=LOG_BG, fg=LOG_TEXT, insertbackground=TEXT,
+            font=("Consolas", 10), padx=12, pady=12, wrap="none",
+            xscrollcommand=horizontal.set, yscrollcommand=vertical.set,
+            relief="flat", bd=0, state="disabled")
+        self.log_full_text.pack(fill="both", expand=True)
+        vertical.configure(command=self.log_full_text.yview)
+        horizontal.configure(command=self.log_full_text.xview)
+        for key, color in (("INFO", "#82d7a0"), ("WARN", "#ffe29c"),
+                           ("ERROR", "#ff9292")):
+            self.log_full_text.tag_configure(key, foreground=color)
+        return page
+
     def toggle_log_details(self):
         self._log_expanded = not self._log_expanded
         if self._log_expanded:
-            self.log_text.pack(fill="both", expand=True, padx=12, pady=(0, 12))
+            self.log_text.pack(fill="both", expand=True)
             self.log_toggle_btn.configure(text="Hide Details ▲")
         else:
             self.log_text.pack_forget()
             self.log_toggle_btn.configure(text="Show Details ▼")
 
     def set_all_products(self, selected):
-        if self.running:
+        if self.running or self.validating:
             return
-        for value in self.product_vars.values():
-            value.set(bool(selected))
-        self._sync_product_selection()
+        before = tuple(self.selected_products())
+        for name, value in self.product_vars.items():
+            value.set(bool(selected) and (name != "Tile Index" or self.has_segmented_entities()))
+        if self.input_validated and tuple(self.selected_products()) != before:
+            # Eligibility was checked for a different set of required sources.
+            self._invalidate_input_validation()
+        else:
+            self._sync_product_selection()
 
     def _sync_product_selection(self):
         selected = len(self.selected_products())
@@ -707,7 +781,7 @@ class RetilerApp(tk.Tk):
         if hasattr(self, "summary_values"):
             self.summary_values["products"].configure(text=str(selected))
         if hasattr(self, "run_btn") and not self.running:
-            state = "normal" if selected else "disabled"
+            state = "normal" if selected and self.input_validated and self.context else "disabled"
             self.run_btn.configure(state=state)
             self.rerun_btn.configure(state=state)
         self._refresh_build_details()
@@ -721,7 +795,10 @@ class RetilerApp(tk.Tk):
             self.product_vars["LAZ"].set(True)
         if changed == "LAZ" and not self.product_vars["LAZ"].get():
             self.product_vars["zLAS"].set(False)
-        self._sync_product_selection()
+        if hasattr(self, "input_validated") and self.input_validated:
+            self._invalidate_input_validation()
+        else:
+            self._sync_product_selection()
 
     # ---------- Mapping page ----------
     def _build_mapping_page(self):
@@ -790,18 +867,18 @@ class RetilerApp(tk.Tk):
             page, "ATCO Retiler production workflow", bg=BG, color=MUTED
         ).pack(anchor="w", padx=18, pady=(0, 10))
         steps = (
-            ("1. Select source data",
-             "Use Data Sources or Browse on Build. Input must contain AOI, orthos and point_cloud as required by your selected products."),
-            ("2. Check project and revision",
-             "Confirm the detected circuit/revision, the approved central segment count and the AOI / Orthos / LiDAR readiness indicators."),
-            ("3. Select deliverables",
-             "Tick TIFF, ECW, LAZ, zLAS and/or Tile Index in Products & Progress. ECW selects TIFF; zLAS selects LAZ."),
-            ("4. Validate setup",
-             "Click Validate Setup and resolve missing tools or central data before processing. Check Global Mapper for ECW and EzLAS for zLAS."),
-            ("5. Run or recover",
-             "Run Build overwrites existing selected outputs after confirmation. Rerun Missing only fills missing products. Pause and Stop apply to active builds."),
+            ("1. Prepare local project data",
+             "Select the local Input folder containing aoi and the selected product sources: orthos for TIFF/ECW, point_cloud for LAZ/zLAS. The database on W: is used as a read-only geometry reference, not a list of remote files to choose."),
+            ("2. Select deliverables",
+             "Tick TIFF, ECW, LAZ, zLAS and/or Tile Index in Products & Progress. ECW requires TIFF; zLAS requires LAZ. Tile Index applies only to segmented circuits."),
+            ("3. Validate Input",
+             "Click Validate Input under the three source indicators in Project Setup. They remain grey before validation and turn green when their required source data and matching footprints pass. Unselected source types remain grey."),
+            ("4. Choose eligible entities",
+             "Only registered circuits or areas matched to local AOI and selected source coverage appear after validation. Select one or more entries; circuits use approved segments and areas use one approved polygon."),
+            ("5. Process or recover",
+             "Process overwrites selected existing outputs after confirmation. Process Missing fills gaps. Changing input or selected products requires revalidation before processing."),
             ("6. Review QA and deliver",
-             "Open QA & Reports and verify imagery extent/masks, ECW transparency, LAZ classifications, zLAS equivalence and Tile Index attributes."),
+             "Footprint validation does not prove every valid image pixel or LiDAR point is present. Review TIFF masks and seams, ECW appearance, LAZ classes, zLAS verification and circuit Tile Index attributes before delivery."),
         )
         for heading, description in steps:
             outer, inner = self.card(page)
@@ -850,6 +927,7 @@ class RetilerApp(tk.Tk):
         if not p:
             return
         self.input_root = Path(p)
+        self._aoi_selection_initialized = False
         self.output_root = core.default_output_root(self.input_root)
         self.save_cfg()
         self.refresh_mapping()
@@ -870,63 +948,189 @@ class RetilerApp(tk.Tk):
         if p:
             self.gm_var.set(p)
 
-    def refresh_mapping(self):
-        self.input_entry.delete(0,"end")
-        self.input_entry.insert(0, human_path(self.input_root))
-        self.output_entry.delete(0,"end")
-        self.output_entry.insert(0, human_path(self.output_root))
+    def _select_all_aois(self):
+        self.aoi_list.selection_set(0, "end")
+        self._update_aoi_context()
 
-        if self.input_root and self.input_root.is_dir():
-            self.mapped = core.map_input(self.input_root)
-        else:
-            self.mapped = {"aoi":None,"orthos":None,"point_cloud":None}
+    def selected_aois(self):
+        return [self.aoi_options[i] for i in self.aoi_list.curselection()
+                if i < len(self.aoi_options)]
 
-        for w in self.mapping_chip_frame.winfo_children():
-            w.destroy()
-        for key,label in (("aoi","AOI"),("orthos","Orthos"),("point_cloud","Point Cloud (LiDAR)")):
-            ok = self.mapped.get(key) is not None
-            self.badge(self.mapping_chip_frame, f"{'●' if ok else '○'}  {label}", "ok" if ok else "bad").pack(side="top", anchor="w", pady=3)
-
-        for w in self.mapping_detail.winfo_children():
-            w.destroy()
-        for key,label in (("aoi","AOI"),("orthos","Orthos"),("point_cloud","Point Cloud")):
-            p = self.mapped.get(key)
-            row = tk.Frame(self.mapping_detail,bg=CARD); row.pack(fill="x",pady=5)
-            self.badge(row, "OK" if p else "MISSING", "ok" if p else "bad").pack(side="left")
-            tk.Label(row,text=label,width=16,anchor="w",bg=CARD,fg=TEXT,font=("Segoe UI",10,"bold")).pack(side="left",padx=10)
-            tk.Label(row,text=str(p or "Not mapped"),anchor="w",bg=CARD,fg=MUTED,font=("Segoe UI",9)).pack(side="left",fill="x",expand=True)
-
+    def _update_aoi_context(self):
         self.context = None
         self.blocks = []
-        try:
-            if self.mapped.get("aoi"):
-                sys.path.insert(0,str(MODULES))
+        self.cloud_blocks = []
+        self.entity_records = []
+        selected = self.selected_aois()
+        if not selected:
+            self.context_label.configure(text="Select one or more eligible entities")
+        else:
+            try:
+                sys.path.insert(0, str(MODULES))
                 import process_orthos as po
-                shp = po.find_polygon_shp(self.mapped["aoi"])
-                circuit = po.circuit_from_polygon(shp)
-                rec = po.load_aoi_revision(circuit, shp)
-                _, seg = po.load_segments(circuit, rec["revision_code"])
-                self.blocks = [str(v) for v in seg["DeliveryName"].tolist()]
-                self.context = (circuit, rec["revision_code"])
-                self.context_label.configure(text=f"{circuit} / {rec['revision_code']}")
-            else:
-                self.context_label.configure(text="Not detected")
-        except Exception as exc:
-            self.context_label.configure(text="Mapping error")
-            self.log(f"Context detection: {exc}", "WARN")
-
-        self._count_source_files()
+                from central_aoi_catalogue import validate_standalone
+                from atco_delivery import YEAR, TILE_VERSION
+                for item in selected:
+                    entity = item["entity"]
+                    shp = item["path"]
+                    if item["has_segments"]:
+                        rec = po.load_aoi_revision(entity, shp)
+                        _, seg = po.load_segments(entity, rec["revision_code"])
+                        imagery = [str(v) for v in seg["ImageryName"]]
+                        cloud = [str(v) for v in seg["PointCloudName"]]
+                        revision = rec["revision_code"]
+                    else:
+                        validate_standalone(item)
+                        imagery = [f"{entity}_{YEAR}_{TILE_VERSION}"]
+                        cloud = imagery[:]
+                        revision = item["revision"]
+                    record = {
+                        "path": shp, "entity": entity, "revision": revision,
+                        "imagery": imagery, "cloud": cloud,
+                        "has_segments": item["has_segments"], "kind": item["kind"],
+                        "layer": item.get("layer"), "source_ref": item.get("source_ref"),
+                    }
+                    self.entity_records.append(record)
+                    self.blocks.extend(imagery)
+                    self.cloud_blocks.extend(cloud)
+                first = self.entity_records[0]
+                self.context = (first["entity"], first["revision"])
+                self.context_label.configure(
+                    text=f"{len(self.entity_records)} eligible entity(s) | "
+                         + ", ".join(f"{r['entity']} ({r['kind']})"
+                                     for r in self.entity_records[:5]))
+            except Exception as exc:
+                self.context_label.configure(text="AOI validation error")
+                self.log(f"AOI preflight: {exc}", "WARN")
+                self.context = None
+                self.blocks = []
+                self.cloud_blocks = []
+                self.entity_records = []
+        if hasattr(self, "product_checks"):
+            allow_index = bool(self.has_segmented_entities())
+            self.product_checks["Tile Index"].configure(
+                state="normal" if allow_index else "disabled")
+            if not allow_index:
+                self.product_vars["Tile Index"].set(False)
+            self._sync_product_selection()
         if hasattr(self, "summary_values"):
             self.summary_values["project"].configure(
-                text=f"{self.context[0]} / {self.context[1]}" if self.context else "Awaiting input")
-            self.summary_values["sources"].configure(
-                text=f"{self.source_tiff_count} + {self.source_lidar_count}")
+                text=f"{len(self.entity_records)} entities" if self.entity_records else "Awaiting input")
             self.summary_values["segments"].configure(
-                text=str(len(self.blocks)) if self.blocks else "—")
+                text=str(sum(len(x["imagery"]) for x in self.entity_records
+                             if x["has_segments"])) if self.entity_records else "—")
         self.refresh_product_status()
 
+    def refresh_mapping(self):
+        """Map local inputs only. Never enumerate remote registry entries here."""
+        self.input_entry.delete(0, "end")
+        self.input_entry.insert(0, human_path(self.input_root))
+        self.output_entry.delete(0, "end")
+        self.output_entry.insert(0, human_path(self.output_root))
+        self.mapped = (core.map_input(self.input_root)
+                       if self.input_root and self.input_root.is_dir()
+                       else {"aoi": None, "orthos": None, "point_cloud": None})
+        self._set_input_badges({key: "pending" for key in ("aoi", "orthos", "point_cloud")})
+        for w in self.mapping_detail.winfo_children():
+            w.destroy()
+        for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
+                           ("point_cloud", "Point Cloud")):
+            p = self.mapped.get(key)
+            row = tk.Frame(self.mapping_detail, bg=CARD)
+            row.pack(fill="x", pady=5)
+            self.badge(row, "OK" if p else "MISSING", "ok" if p else "bad").pack(side="left")
+            tk.Label(row, text=label, width=16, anchor="w", bg=CARD, fg=TEXT,
+                     font=("Segoe UI", 10, "bold")).pack(side="left", padx=10)
+            tk.Label(row, text=str(p or "Not mapped"), anchor="w", bg=CARD, fg=MUTED,
+                     font=("Segoe UI", 9)).pack(side="left", fill="x", expand=True)
+        self._invalidate_input_validation()
+        self._count_source_files()
+        if hasattr(self, "summary_values"):
+            self.summary_values["sources"].configure(
+                text=f"{self.source_tiff_count} + {self.source_lidar_count}")
+        self.refresh_product_status()
+
+    def _set_input_badges(self, states):
+        """Three indicators are grey until their content passes validation."""
+        for child in self.mapping_chip_frame.winfo_children():
+            child.destroy()
+        self.input_badge_states = dict(states)
+        for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
+                           ("point_cloud", "Point Cloud (LiDAR)")):
+            state = states.get(key, "pending")
+            symbol = "●" if state == "validated" else ("×" if state == "error" else "○")
+            style = ("ok" if state == "validated"
+                     else "bad" if state == "error" else "muted")
+            self.badge(self.mapping_chip_frame, f"{symbol}  {label}", style).pack(
+                side="top", anchor="w", pady=3)
+
+    def _invalidate_input_validation(self):
+        self.input_validated = False
+        if hasattr(self, "mapping_chip_frame"):
+            self._set_input_badges({key: "pending" for key in
+                                    ("aoi", "orthos", "point_cloud")})
+        self.context = None
+        self.blocks = []
+        self.cloud_blocks = []
+        self.entity_records = []
+        self.aoi_options = []
+        self.aoi_list.configure(state="normal")
+        self.aoi_list.delete(0, "end")
+        self.context_label.configure(text="Select local input, then Validate Input to find eligible entities")
+        self.product_vars["Tile Index"].set(False)
+        self.product_checks["Tile Index"].configure(state="disabled")
+        self._sync_product_selection()
+        if hasattr(self, "summary_values"):
+            self.summary_values["project"].configure(text="Awaiting validation")
+            self.summary_values["segments"].configure(text="—")
+
+    def _apply_eligible_entities(self, eligible, excluded):
+        """Called on the UI thread after spatial checks complete."""
+        self.validating = False
+        used = {
+            "aoi": True,
+            "orthos": any(p in self._validation_products for p in ("TIFF", "ECW")),
+            "point_cloud": any(p in self._validation_products for p in ("LAZ", "zLAS")),
+        }
+        self._set_input_badges({
+            key: "validated" if used[key] and self.mapped.get(key) else "pending"
+            for key in used
+        })
+        self.validate_btn.configure(state="normal", text="✓  Validate Input")
+        self.aoi_options = list(eligible)
+        self.aoi_list.delete(0, "end")
+        for item in eligible:
+            self.aoi_list.insert(
+                "end", f"{item['entity']}  [{item['kind']}]  {item['revision']}")
+        if eligible:
+            self.input_validated = True
+            self.aoi_list.selection_set(0)
+            self._update_aoi_context()
+            self.log(f"VALIDATION: {len(eligible)} eligible entities; "
+                     f"{len(excluded)} excluded. Footprint coverage is not pixel QA.", "INFO")
+            for name, reason in excluded:
+                self.log(f"Excluded {name}: {reason}", "WARN")
+            messagebox.showinfo(APP_NAME,
+                f"Input validated. {len(eligible)} eligible entities found.\n"
+                "Choose the entities to process.\n\n"
+                "Coverage uses spatial footprints; output QA still applies.")
+        else:
+            self._invalidate_input_validation()
+            self.log(f"VALIDATION: 0 eligible entities; {len(excluded)} exclusions.", "WARN")
+            for name, reason in excluded:
+                self.log(f"Excluded {name}: {reason}", "WARN")
+            messagebox.showwarning(APP_NAME,
+                "No circuit or area has sufficient matching local AOI and "
+                "source coverage. Check Activity Log.")
+        self.refresh_product_status()
+
+    def has_segmented_entities(self):
+        return any(r.get("has_segments") for r in self.entity_records)
+
     def selected_products(self):
-        return [k for k,v in self.product_vars.items() if v.get()]
+        return [k for k, v in self.product_vars.items() if v.get() and
+                (k != "Tile Index" or self.has_segmented_entities()
+                 or not self.entity_records)]
 
     def product_paths(self):
         if not self.context:
@@ -941,23 +1145,30 @@ class RetilerApp(tk.Tk):
             return False
 
     def status_snapshot(self):
-        if not self.context or not self.blocks:
+        if not self.entity_records:
             return {}
-        circuit, rev = self.context
-        base = core.output_base(self.output_root, circuit)
-        data = {}
-        for prod,folder,ext in (
-            ("TIFF","TIFF",".tif"),
-            ("ECW","ECW",".ecw"),
-            ("LAZ","LAZ",".laz"),
-            ("zLAS","zLAS",".zlas"),
-        ):
-            present = sum(1 for b in self.blocks if self._is_valid_file(base/folder/f"{b}{ext}"))
-            data[prod] = (len(self.blocks), present)
-        tile_shp = core.tile_index_shp_path(base, circuit)
-        shp_ok = self._is_valid_file(tile_shp) and tile_shp.with_suffix('.dbf').is_file() and tile_shp.with_suffix('.shx').is_file()
-        data["Tile Index"] = (1, 1 if shp_ok else 0)
-        return data
+        counts = {key: [0, 0] for key in ("TIFF", "ECW", "LAZ", "zLAS", "Tile Index")}
+        for record in self.entity_records:
+            entity = record["entity"]
+            base = core.output_base(self.output_root, entity)
+            for product, folder, ext in (
+                ("TIFF", "TIFF", ".tif"),
+                ("ECW", "ECW", ".ecw"),
+                ("LAZ", "LAZ", ".laz"),
+                ("zLAS", "zLAS", ".zlas"),
+            ):
+                names = record["cloud"] if product in ("LAZ", "zLAS") else record["imagery"]
+                counts[product][0] += len(names)
+                target_folder = product_folder(product, converter=not record["has_segments"])
+                counts[product][1] += sum(
+                    1 for name in names if self._is_valid_file(base / target_folder / f"{name}{ext}"))
+            if record["has_segments"]:
+                shp = core.tile_index_shp_path(base, entity)
+                counts["Tile Index"][0] += 1
+                if (self._is_valid_file(shp) and shp.with_suffix(".dbf").is_file()
+                        and shp.with_suffix(".shx").is_file()):
+                    counts["Tile Index"][1] += 1
+        return {key: tuple(value) for key, value in counts.items()}
 
     def refresh_product_status(self):
         snap = self.status_snapshot()
@@ -1039,7 +1250,9 @@ class RetilerApp(tk.Tk):
     def start_build(self, rerun):
         if self.running:
             return
-        self.refresh_mapping()
+        if not self.input_validated:
+            messagebox.showwarning(APP_NAME, "Run Validate Input before processing.")
+            return
         selected = self.selected_products()
         if not selected:
             messagebox.showwarning(APP_NAME, "Select at least one product to build.")
@@ -1056,6 +1269,8 @@ class RetilerApp(tk.Tk):
         if needs_pc and not self.mapped.get("point_cloud"):
             messagebox.showerror(APP_NAME, "Point Cloud input is missing.")
             return
+        # Missing PDAL is installed noninteractively in the worker before any
+        # TIFF/ECW work begins. Do not block the GUI or pre-download for imagery.
         if "zLAS" in selected and not EZLAS.is_file():
             messagebox.showerror(APP_NAME, f"EzLAS.exe is missing:\n{EZLAS}")
             return
@@ -1082,12 +1297,13 @@ class RetilerApp(tk.Tk):
                     return
 
         self.running = True
+        self.aoi_list.configure(state="disabled")
         for check in self.product_checks.values():
             check.configure(state="disabled")
         self.paused = False
         self.stop_requested = False
         self.suspended_pids = []
-        self.build_mode = "Rerun Missing" if rerun else "Full Build"
+        self.build_mode = "Process Missing" if rerun else "Process All"
         self.current_stage = "Starting"
         self.build_start_time = time.time()
         self.build_elapsed_final = 0.0
@@ -1098,56 +1314,103 @@ class RetilerApp(tk.Tk):
         self.status_text.configure(text="Running")
         self.status_dot.configure(fg=BLUE)
         self.session_created = {k: 0 for k in self.session_created}
-        self.log(f"{'RERUN MISSING' if rerun else 'FULL BUILD'} - {self.context[0]} / {self.context[1]}", "INFO")
+        self.log(f"{'PROCESS MISSING' if rerun else 'PROCESS ALL'} - {self.context[0]} / {self.context[1]}", "INFO")
 
-        th = threading.Thread(target=self._build_worker, args=(rerun,selected,gm), daemon=True)
+        records = list(self.entity_records)
+        input_sources = dict(self.mapped)
+        output_root = Path(self.output_root)
+        workers = int(self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2)))
+        th = threading.Thread(
+            target=self._build_worker,
+            args=(rerun, selected, gm, records, input_sources, output_root, workers),
+            daemon=True)
         th.start()
 
-    def _build_worker(self, rerun, selected, gm):
+    def _build_worker(self, rerun, selected, gm, records, input_sources, output_root, workers):
         try:
             env = os.environ.copy()
-            env["ATCO_PARALLEL_WORKERS"] = str(int(self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2))))
+            env["ATCO_PARALLEL_WORKERS"] = str(workers)
             overwrite = [] if rerun else ["--overwrite"]
-
-            # Imagery
-            if any(x in selected for x in ("TIFF","ECW")):
-                args = [
-                    sys.executable, str(MODULES/"process_orthos.py"),
-                    "--aoi", str(self.mapped["aoi"]),
-                    "--source", str(self.mapped["orthos"]),
-                    "--output-root", str(self.output_root),
-                    *overwrite,
-                ]
-                if "ECW" in selected:
-                    args += ["--global-mapper-exe", str(gm)]
-                else:
-                    args += ["--tiff-only"]
-                rc = self._run_stream(args, env=env)
+            if any(product in selected for product in ("LAZ", "zLAS")):
+                self.log_queue.put(("LINE",
+                    "Checking optional PDAL support for LAZ/zLAS..."))
+                rc = self._run_stream(
+                    [sys.executable, str(TOOL_ROOT / "ensure_lidar_support.py")],
+                    env=env)
                 if rc:
-                    raise RuntimeError(f"Imagery processor failed with exit code {rc}")
-
-            # LiDAR / Tile Index SHP
-            if any(x in selected for x in ("LAZ","zLAS","Tile Index")):
-                args = [
-                    sys.executable, str(MODULES/"process_lidar.py"),
-                    "--aoi", str(self.mapped["aoi"]),
-                    "--output-root", str(self.output_root),
-                    *overwrite,
-                ]
-                if any(x in selected for x in ("LAZ","zLAS")):
-                    args += ["--source", str(self.mapped["point_cloud"])]
-                if "zLAS" in selected:
-                    args += ["--zlas","--ezlas-exe",str(EZLAS)]
-                if "Tile Index" in selected:
-                    args += ["--tile-index"]
-                rc = self._run_stream(args, env=env)
-                if rc:
-                    raise RuntimeError(f"LiDAR processor failed with exit code {rc}")
-
+                    raise RuntimeError(
+                        "Automatic PDAL setup failed. See Activity Log for Conda errors.")
+                if self.stop_requested:
+                    self.log_queue.put(("STOP", "Build stopped during PDAL setup"))
+                    return
+            for idx, record in enumerate(records, 1):
+                if self.stop_requested:
+                    break
+                aoi = str(record["path"])
+                self.log_queue.put(("LINE",
+                    f"ENTITY {idx}/{len(records)}: {record['entity']} ({record['kind']})"))
+                if not record["has_segments"]:
+                    products = [p for p in selected if p != "Tile Index"]
+                    if not products:
+                        self.log_queue.put(("LINE",
+                            "Skipping area entity: Tile Index only applies to circuits"))
+                        continue
+                    args = [
+                        sys.executable, str(MODULES / "process_aoi_converter.py"),
+                        "--aoi", aoi, "--entity", record["entity"],
+                        "--revision", record["revision"],
+                        * (["--aoi-layer", record["layer"]] if record.get("layer") else []),
+                        "--output-root", str(output_root), *overwrite,
+                    ]
+                    if any(p in products for p in ("TIFF", "ECW")):
+                        args += ["--ortho-source", str(input_sources["orthos"])]
+                    if any(p in products for p in ("LAZ", "zLAS")):
+                        args += ["--cloud-source", str(input_sources["point_cloud"])]
+                    for product in products:
+                        args.append("--" + product.lower())
+                    if "ECW" in products:
+                        args += ["--global-mapper-exe", str(gm)]
+                    if "zLAS" in products:
+                        args += ["--ezlas-exe", str(EZLAS)]
+                    rc = self._run_stream(args, env=env)
+                    if rc:
+                        raise RuntimeError(f"Converter failed for {record['entity']} (exit {rc})")
+                    self.log_queue.put(("ENTITY_DONE", record["entity"]))
+                    continue
+                if any(p in selected for p in ("TIFF", "ECW")):
+                    args = [
+                        sys.executable, str(MODULES / "process_orthos.py"),
+                        "--aoi", aoi, "--source", str(input_sources["orthos"]),
+                        "--output-root", str(output_root), *overwrite,
+                    ]
+                    if "ECW" in selected:
+                        args += ["--global-mapper-exe", str(gm)]
+                    else:
+                        args += ["--tiff-only"]
+                    rc = self._run_stream(args, env=env)
+                    if rc:
+                        raise RuntimeError(f"Imagery failed for {record['entity']} (exit {rc})")
+                if self.stop_requested:
+                    break
+                if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")):
+                    args = [
+                        sys.executable, str(MODULES / "process_lidar.py"),
+                        "--aoi", aoi, "--output-root", str(output_root), *overwrite,
+                    ]
+                    if any(p in selected for p in ("LAZ", "zLAS")):
+                        args += ["--source", str(input_sources["point_cloud"])]
+                    if "zLAS" in selected:
+                        args += ["--zlas", "--ezlas-exe", str(EZLAS)]
+                    if "Tile Index" in selected:
+                        args += ["--tile-index"]
+                    rc = self._run_stream(args, env=env)
+                    if rc:
+                        raise RuntimeError(f"LiDAR failed for {record['entity']} (exit {rc})")
+                self.log_queue.put(("ENTITY_DONE", record["entity"]))
             if self.stop_requested:
                 self.log_queue.put(("STOP", "Build stopped by operator"))
             else:
-                self.log_queue.put(("DONE", "Build complete"))
+                self.log_queue.put(("DONE", f"Build complete: {len(records)} entities"))
         except Exception as exc:
             if self.stop_requested:
                 self.log_queue.put(("STOP", "Build stopped by operator"))
@@ -1261,24 +1524,31 @@ class RetilerApp(tk.Tk):
             self.log(f"Stop: could not terminate full process tree: {exc}", "WARN")
 
     def _cleanup_partial_outputs(self):
-        base = self.current_base()
-        if not base or not base.exists():
-            return
-        for p in list(base.rglob("*.tmp")) + list(base.rglob("*.tmp.*")):
-            try:
-                if p.is_file():
-                    p.unlink()
-            except OSError:
-                pass
-        for folder in (base/"TIFF", base/"ECW", base/"LAZ", base/"zLAS"):
-            if folder.is_dir():
-                for p in folder.iterdir():
-                    try:
-                        if p.is_file() and p.stat().st_size == 0:
-                            p.unlink()
-                    except OSError:
-                        pass
-        shutil.rmtree(base/"QA"/"LiDAR"/"temp_las_for_zlas", ignore_errors=True)
+        # A stopped multi-entity run may leave temporary files beyond the first entity.
+        bases = ([core.output_base(self.output_root, r["entity"]) for r in self.entity_records]
+                 if self.entity_records else [self.current_base()])
+        for base in bases:
+            if not base or not base.exists():
+                continue
+            for p in list(base.rglob("*.tmp")) + list(base.rglob("*.tmp.*")):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                except OSError:
+                    pass
+            for folder in (base / name for product in ("TIFF", "ECW", "LAZ", "zLAS")
+                           for name in (product_folder(product), product_folder(product, converter=True))):
+                if folder.is_dir():
+                    for p in folder.iterdir():
+                        try:
+                            if p.is_file() and p.stat().st_size == 0:
+                                p.unlink()
+                        except OSError:
+                            pass
+            shutil.rmtree(base / "QA" / "LiDAR" / "temp_las_for_zlas",
+                          ignore_errors=True)
+            shutil.rmtree(base / "QA" / "Converter" / "temp_las_for_zlas",
+                          ignore_errors=True)
 
     def stop_build(self, confirm=True):
         if not self.running:
@@ -1397,11 +1667,23 @@ class RetilerApp(tk.Tk):
         self.log_text.insert("end", text + "\n")
         self.log_text.see("end")
         self.log_text.configure(state="disabled")
+        if hasattr(self, "log_full_text"):
+            self.log_full_text.configure(state="normal")
+            self.log_full_text.insert("end", f"[{stamp}] ")
+            self.log_full_text.insert("end", f"{level:<5} ",
+                                      level if level in ("INFO", "WARN", "ERROR") else None)
+            self.log_full_text.insert("end", text + "\n")
+            self.log_full_text.see("end")
+            self.log_full_text.configure(state="disabled")
 
     def clear_log(self):
         self.log_text.configure(state="normal")
         self.log_text.delete("1.0","end")
         self.log_text.configure(state="disabled")
+        if hasattr(self, "log_full_text"):
+            self.log_full_text.configure(state="normal")
+            self.log_full_text.delete("1.0", "end")
+            self.log_full_text.configure(state="disabled")
 
     def _drain_log_queue(self):
         try:
@@ -1410,6 +1692,20 @@ class RetilerApp(tk.Tk):
                 if kind == "LINE":
                     self.log(payload,"INFO")
                     self._parse_progress(payload)
+                elif kind == "ELIGIBLE":
+                    self._apply_eligible_entities(*payload)
+                elif kind == "VALIDATE_FAIL":
+                    self.validating = False
+                    self.validate_btn.configure(state="normal", text="✓  Validate Input")
+                    self._set_input_badges({
+                        key: "error" if self.mapped.get(key) else "pending"
+                        for key in ("aoi", "orthos", "point_cloud")
+                    })
+                    self.log(f"Validation failed: {payload}", "ERROR")
+                    messagebox.showerror(APP_NAME, f"Input validation failed:\\n\\n{payload}")
+                elif kind == "ENTITY_DONE":
+                    self.log(f"Completed entity: {payload}", "INFO")
+                    self.refresh_product_status()
                 elif kind == "DONE":
                     self.log(payload,"INFO")
                     self._finish_run(True)
@@ -1435,52 +1731,74 @@ class RetilerApp(tk.Tk):
         self.stop_requested = False
         self.run_btn.configure(state="normal")
         self.rerun_btn.configure(state="normal")
-        for check in self.product_checks.values():
-            check.configure(state="normal")
+        self.aoi_list.configure(state="normal")
+        for name, check in self.product_checks.items():
+            check.configure(state="disabled" if name == "Tile Index" and not self.has_segmented_entities()
+                            else "normal")
         self._sync_product_selection()
         self.pause_btn.configure(state="disabled", text="⏸  Pause")
         self.stop_btn.configure(state="disabled")
-        self.status_text.configure(text="Stopped" if stopped else ("Ready" if ok else "Build failed"))
+        self.status_text.configure(text="Stopped" if stopped else ("Ready" if ok else "Processing failed"))
         self.status_dot.configure(fg=AMBER if stopped else ("#48bd54" if ok else RED))
         self.refresh_product_status()
         if stopped:
             messagebox.showinfo(APP_NAME, "Build stopped. Completed products were kept; temporary/zero-byte files were cleaned.")
         elif ok:
-            messagebox.showinfo(APP_NAME, "Build finished.")
+            messagebox.showinfo(APP_NAME, "Processing finished.")
         else:
-            messagebox.showerror(APP_NAME, "Build failed. Check the log and QA diagnostics.")
+            messagebox.showerror(APP_NAME, "Processing failed. Check the log and QA diagnostics.")
 
     # ---------- validation/settings/QA ----------
     def validate_setup(self):
-        self.log("Validating runtime and sources...", "INFO")
-        checks = []
-        checks.append(("Central AOI DB",(core.CENTRAL_ROOT/"database"/"atco_aoi_master.sqlite").is_file()))
-        checks.append(("Central Segments",(core.CENTRAL_ROOT/"segments"/"circuit").is_dir()))
-        checks.append(("Client source GDB",core.CLIENT_GDB.is_dir()))
-        checks.append(("Trajectory index",(core.TRAJECTORY_ROOT/"trajectory_index.parquet").is_file()))
-        checks.append(("EzLAS.exe",EZLAS.is_file()))
-        checks.append(("Global Mapper",core.detect_global_mapper(self.cfg) is not None))
+        """Discover processing eligibility exclusively from local input coverage."""
+        if self.running or self.validating:
+            return
+        self._invalidate_input_validation()
+        selected = self.selected_products()
+        if not selected:
+            messagebox.showwarning(APP_NAME, "Select at least one product before validation.")
+            return
+        if not self.mapped.get("aoi"):
+            messagebox.showwarning(APP_NAME, "Input/aoi with polygon geometries is required.")
+            return
+        if any(p in selected for p in ("TIFF", "ECW")) and not self.mapped.get("orthos"):
+            messagebox.showwarning(APP_NAME, "Input/orthos is missing.")
+            return
+        if any(p in selected for p in ("LAZ", "zLAS")) and not self.mapped.get("point_cloud"):
+            messagebox.showwarning(APP_NAME, "Input/point_cloud is missing.")
+            return
+        self.validating = True
+        self._validation_products = tuple(selected)
+        self.validate_btn.configure(state="disabled", text="Checking coverage...")
+        self.log("VALIDATE: indexing local AOI, image footprints, and LiDAR footprints "
+                 "against central AOI revisions...", "INFO")
+        mapped = dict(self.mapped)
+        threading.Thread(
+            target=self._eligibility_worker,
+            args=(mapped, list(selected)), daemon=True).start()
+
+    def _eligibility_worker(self, mapped, selected):
         try:
-            import pyogrio
-            gdb_write = pyogrio.list_drivers().get("OpenFileGDB") in ("rw", "raw")
-        except Exception:
-            try:
-                import fiona
-                gdb_write = fiona.supported_drivers.get("OpenFileGDB") in ("rw", "raw")
-            except Exception:
-                gdb_write = False
-        checks.append(("OpenFileGDB write", gdb_write))
-        for key,label in (("aoi","Input/AOI"),("orthos","Input/Orthos"),("point_cloud","Input/Point Cloud")):
-            checks.append((label,self.mapped.get(key) is not None))
-        bad = []
-        for name,ok in checks:
-            self.log(f"{'OK' if ok else 'MISSING'}  {name}", "INFO" if ok else "WARN")
-            if not ok:
-                bad.append(name)
-        if bad:
-            messagebox.showwarning(APP_NAME, "Validation completed with missing items:\n\n" + "\n".join(bad))
-        else:
-            messagebox.showinfo(APP_NAME, "Validation passed.")
+            from input_eligibility import discover_eligible
+            pdal_exe = None
+            if any(p in selected for p in ("LAZ", "zLAS")):
+                from ensure_lidar_support import pdal_executable, pdal_ready
+                if not pdal_ready():
+                    self.log_queue.put(("LINE",
+                        "PDAL not installed: adding optional LiDAR support before coverage scan..."))
+                    rc = self._run_stream(
+                        [sys.executable, str(TOOL_ROOT / "ensure_lidar_support.py")])
+                    if rc:
+                        raise RuntimeError("Automatic PDAL installation failed. "
+                                           "See Activity Log for details.")
+                    if not pdal_ready():
+                        raise RuntimeError("PDAL installation completed but PDAL is unavailable.")
+                pdal_exe = pdal_executable()
+            eligible, excluded = discover_eligible(
+                mapped, selected, pdal_exe=pdal_exe)
+            self.log_queue.put(("ELIGIBLE", (eligible, excluded)))
+        except Exception as exc:
+            self.log_queue.put(("VALIDATE_FAIL", str(exc)))
 
     def save_settings(self):
         try:
