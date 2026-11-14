@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATCO Retiler v1.07 - Technical Notes</title>
+<title>ATCO Retiler v1.08-dev - Technical Notes</title>
 <style>
 :root{--nav:#18232d;--ink:#17212b;--muted:#64717c;--line:#d5dde3;--green:#2e9638;--soft:#f5f7f9;--blue:#1769d2;--amber:#996500}
 *{box-sizing:border-box} body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);background:#eef2f5;line-height:1.55}
@@ -15,35 +15,50 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 </style>
 </head>
 <body>
-<header><h1>ATCO Retiler v1.07 - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
+<header><h1>ATCO Retiler v1.08-dev - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
 <main>
-<div class="card toc"><strong>Contents:</strong> <a href="#sources">Authoritative sources</a><a href="#naming">Naming</a><a href="#tiff">TIFF</a><a href="#ecw">ECW</a><a href="#laz">LAZ</a><a href="#zlas">zLAS</a><a href="#tiles">Tile Index</a><a href="#trajectory">Trajectory attribution</a><a href="#qa">QA outputs</a></div>
+<div class="card toc"><strong>Contents:</strong> <a href="#workflow">Input validation</a><a href="#sources">Authoritative sources</a><a href="#naming">Naming</a><a href="#tiff">TIFF</a><a href="#ecw">ECW</a><a href="#laz">LAZ</a><a href="#zlas">zLAS</a><a href="#tiles">Tile Index</a><a href="#trajectory">Trajectory attribution</a><a href="#qa">QA outputs</a></div>
+
+<section class="card" id="workflow"><h2>1. Input-first validation and processing</h2>
+<p>v1.08-dev does not display a catalogue of all W-drive entities. An operator first supplies a local <code>input</code> folder containing <code>aoi</code>, <code>orthos</code> and <code>point_cloud</code> as needed by the selected products. The central registry is only a read-only geometry/revision reference.</p>
+<table><tr><th>Stage</th><th>Behaviour and guardrail</th></tr>
+<tr><td>Map local input</td><td>The three AOI / Orthos / Point Cloud indicators start <strong>grey</strong> even if folders exist. Folder detection alone does not count as validation.</td></tr>
+<tr><td>Select products</td><td>TIFF/ECW need four-band RGBI orthos; LAZ/zLAS need LAS/LAZ point clouds. ECW selects TIFF and zLAS selects LAZ. Unselected source types remain optional.</td></tr>
+<tr><td>Validate Input</td><td>Click the button in Project Setup immediately below the three source indicators. In a background thread, the Retiler reads local AOI polygons and source file footprints, compares against the current central registry revisions and checks sufficient matching coverage.</td></tr>
+<tr><td>Indicators</td><td>Successfully checked source types turn <strong>green</strong>; unused/unread source types remain grey. A failed validation shows an error state and logs its cause. This reflects checked source metadata and extents, not pixel/point quality.</td></tr>
+<tr><td>Eligible Entities</td><td>The selection list is filled <strong>only after validation</strong> and contains matched entity name, circuit/area kind and revision code, not original W-drive source paths. Operators may select multiple eligible entities with Ctrl/Shift.</td></tr>
+<tr><td>Process</td><td>The button stays disabled until there is a valid eligibility result, a selected entity and a selected product. <strong>Process</strong> replaces selected existing outputs after confirmation; <strong>Process Missing</strong> fills missing files.</td></tr></table>
+<p>The local AOI must match the full current circuit polygon exactly, or cover at least <strong>99%</strong> of a registered area AOI. Selected imagery and/or LiDAR input file extents must separately cover at least 99% of the candidate geometry. A circuit also requires its approved published segment index. These are source <em>footprint</em> checks; they do not verify the actual count of valid image pixels, point density or gaps inside files. The processing pipeline and QA remain responsible for those checks.</p>
+<div class="warn">Changing input sources or selected products invalidates the prior eligibility result. Run <strong>Validate Input</strong> again. If no entities qualify, check the Activity Log for excluded entities and missing coverage rather than selecting unrelated polygons from W:.</div>
+</section>
 
 <section class="card" id="sources"><h2>1. Authoritative sources and geometry</h2>
-<p>Retiler does not create or edit production segment geometry. It validates the selected AOI against the central registry, then loads the approved segment revision from the W drive.</p>
+<p>Retiler never publishes registry changes. It matches <strong>local input AOI and source coverage</strong> against the current entries in the existing central <code>entities</code>/<code>revisions</code> tables. Only qualifying entities are shown after Validate Input. Circuit processing loads the approved segment index; standalone area processing uses the current registered polygon without segments.</p>
 <table><tr><th>Source</th><th>Purpose</th></tr>
 <tr><td class="path">W:\APPS\PIT\ATCO\database\atco_aoi_master.sqlite</td><td>Central AOI registry and current revision validation.</td></tr>
 <tr><td class="path">W:\APPS\PIT\ATCO\segments\circuit\&lt;ENTITY&gt;\&lt;AOI_REV&gt;</td><td>Approved segment geometry. These files remain unchanged by Retiler.</td></tr>
 <tr><td class="path">W:\APPS\PIT\ATCO\source\trajectories</td><td>Central SBET / trajectory index used for TX tile attribution.</td></tr>
-<tr><td class="path">Input\orthos</td><td>Source RGBI GeoTIFF imagery.</td></tr>
-<tr><td class="path">Input\point_cloud</td><td>Source LAS/LAZ point cloud.</td></tr></table>
-<div class="note">Approved W-drive segments remain the geometry source of truth. Their historical <code>_MU_####</code> IDs are internal only and are not republished or rewritten.</div>
+<tr><td class="path">Input\aoi</td><td>Local polygon candidates; spatial selection input required before matching central revisions.</td></tr>
+<tr><td class="path">Input\orthos</td><td>Local RGBI GeoTIFF imagery when TIFF or ECW is selected.</td></tr>
+<tr><td class="path">Input\point_cloud</td><td>Local LAS/LAZ point cloud when LAZ or zLAS is selected.</td></tr></table>
+<div class="note">Circuit segments from W: remain authoritative and are not rewritten. Standalone Substations and Telecoms have <code>entity_kind=area</code>; they use the registered <code>R01/R02</code> polygon and do not require circuit alignment or segmentation. Both kinds are published by the existing <code>atco_aoi_db.py</code> workflow, never by Retiler itself.</div>
 </section>
 
 <section class="card" id="naming"><h2>2. Delivery naming</h2>
-<p><strong>MU</strong> meant Management Unit and is no longer used in client-facing filenames. Retiler derives the stable sequence from the approved central BlockNum.</p>
+<p><strong>MU</strong> meant Management Unit and is no longer used in client-facing filenames. Retiler derives circuit sequences from approved central BlockNum; areas are a single whole-polygon deliverable.</p>
 <table><tr><th>Entity</th><th>Central ID example</th><th>Delivery name example</th></tr>
-<tr><td>TX</td><td><code>9L137_MU_0001</code></td><td><code>9L137_2026_Tiles_v1_0001</code></td></tr>
-<tr><td>DX</td><td><code>UTIKUMA_OILFIELD_MU_0001</code></td><td><code>UTIKUMA OILFIELD_2026_Tiles_v1_0001</code></td></tr></table>
-<p>DX client-facing entity names follow the names used in the SoW SQLite, including spaces. The sequential number is unique within the entity; the complete entity + year + Tiles + version + sequence name is unique within the project. Tile Index is named <code>9L137_2026_Tiles_v1.shp</code>.</p>
-<p>AOI revision remains metadata and does not create an extra <code>R01</code> delivery folder.</p>
+<tr><td>TX</td><td><code>9L137_MU_0001</code></td><td><code>9L137_0001_2026_5cm_RGBN_v1.tif</code>; <code>9L137_0001_v1.laz</code></td></tr>
+<tr><td>DX</td><td><code>UTIKUMA_OILFIELD_MU_0001</code></td><td><code>UTIKUMA OILFIELD_0001_2026_5cm_RGBN_v1.tif</code></td></tr>
+<tr><td>Area</td><td><code>BATTLE_RIVER_Substation</code></td><td><code>BATTLE_RIVER_Substation_2026_v1.tif</code> (provisional)</td></tr></table>
+<p>DX client-facing entity names follow SoW SQLite conventions, including spaces. Segmented imagery uses <code>&lt;Entity&gt;_&lt;TileID&gt;_2026_5cm_RGBN_v1</code>; point clouds use <code>&lt;Entity&gt;_&lt;TileID&gt;_v1</code>. The client-facing filename says <code>RGBN</code> although the fourth TIFF band is NIR (RGBI); naming confirmation remains pending. Circuit Tile Index uses <code>9L137_2026_Tiles_v1.shp</code>; area entities do not have a Tile Index.</p>
+<p>AOI revision remains metadata and does not create an extra <code>R01</code> delivery folder. Product locations are automatically separated: <code>TIFF_segments</code>, <code>ECW_segments</code>, <code>LAZ_segments</code>, <code>zLAS_segments</code> for circuits; <code>TIFF_area</code>, <code>ECW_area</code>, <code>LAZ_area</code>, <code>zLAS_area</code> for unsegmented areas. Old v1.07 un-suffixed product folders are not reused as v1.08 cache.</p>
 </section>
 
 <section class="card" id="tiff"><h2>3. TIFF generation</h2>
-<p><strong>Purpose:</strong> 4-band RGBI client orthophoto tiles aligned to the approved ATCO segment workflow.</p>
+<p><strong>Purpose:</strong> 4-band RGBI outputs. Circuits generate approved segment tiles; registered area AOIs generate one whole-area TIFF with no segment index.</p>
 <ul><li>Source TIFFs are validated for CRS, pixel size, common pixel lattice and 4-band RGBI content.</li>
-<li>Retiler creates internal <strong>Ortho Processing Footprints</strong> aligned to the source pixel grid. These are processing footprints, not the client Tile Index.</li>
-<li>Source imagery is mosaicked/cropped to the processing footprint and masked outside the full circuit AOI.</li>
+<li>For circuits, Retiler creates internal <strong>Ortho Processing Footprints</strong> aligned to the source pixel grid. These are processing footprints, not the client Tile Index. Large standalone areas use windowed BigTIFF export to bound RAM consumption, with a free-disk-space preflight.</li>
+<li>Source imagery is mosaicked/cropped to circuit processing footprints or to a standalone area polygon and masked outside the approved entity AOI.</li>
 <li>Final TIFF remains four bands: Red, Green, Blue, NIR. Band 4 is not Alpha.</li>
 <li>The all-four-band tuples <code>254,254,254,254</code> and <code>255,255,255,255</code> are treated as background during source mosaicking; valid overlapping image pixels can fill such areas.</li><li><strong>ArcGIS Pro compatibility rollback:</strong> the delivered 4-band TIFF carries explicit <code>NoData=255</code> and background pixels are <code>255</code> across all bands. Valid individual source values of 255 are adjusted to 254 to avoid accidental NoData masking by band-level renderers. Band 4 remains NIR, never Alpha.</li>
 <li>Final GeoTIFF is tiled, LZW compressed, 512 × 512 internal blocks.</li></ul>
@@ -59,15 +74,15 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <li>Pixels outside the delivered TIFF NoData mask are explicitly set to white <code>(255,255,255)</code>. In-range valid RGB values are preserved.</li>
 <li>Global Mapper receives the 3-band input without contrast enhancement and exports ECW v3, target compression 10:1, with <code>BG_TRANSPARENT=NO</code>.</li>
 <li><strong>Compatibility decision:</strong> the 3-band ECW does not encode transparency. A white outside-footprint background is expected. Compression may create faint edge fringes; no magenta RGB fill or fourth Alpha band should be present.</li>
-<li>Following any ECW export-configuration change, select <strong>Run Build</strong> and confirm overwrite of existing ECWs. <strong>Rerun Missing</strong> does not replace already-present previous-version ECWs.</li></ul>
+<li>Following any ECW export-configuration change, select <strong>Process</strong> and confirm overwrite of existing ECWs. <strong>Process Missing</strong> does not replace already-present previous-version ECWs.</li></ul>
 <div class="warn"><strong>Release QA gate:</strong> build a fresh test ECW (e.g. tile 0008), verify 3-band interpretation and white/no-magenta background in Global Mapper, MicroStation Raster Manager, TerraScan and PLS-CADD. Verify alignment and investigate edge halos. Do not mark compatible before PLS acceptance. TIFF keeps its internal mask and is not altered by this change.</div>
 </section>
 
 <section class="card" id="laz"><h2>5. LAZ generation</h2>
-<p><strong>Purpose:</strong> exact segment crop of the classified source point cloud.</p>
+<p><strong>Purpose:</strong> exact polygon crop of the classified source point cloud, by segment for circuits or by one registered polygon for areas.</p>
 <ul><li>PDAL inventories source LAS/LAZ and validates the horizontal CRS against the AOI.</li>
 <li>Compound CRS / vertical datum from source point clouds is preserved where consistently present.</li>
-<li>All intersecting source clouds are merged and cropped to the exact approved segment polygon.</li>
+<li>All intersecting source clouds are merged and cropped to the approved segment polygon (circuit) or approved whole-area polygon (area).</li>
 <li>Only Classification 7 (Low Noise) is removed.</li>
 <li>Other classifications and point attributes are preserved.</li>
 <li>Retiler does <strong>not</strong> automatically change Synthetic flags.</li></ul>
@@ -85,7 +100,7 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 </section>
 
 <section class="card" id="tiles"><h2>7. Tile Index</h2>
-<p>Retiler creates an <strong>intermediate shapefile</strong> named using the circuit, year and version (for example <code>9L137_2026_Tiles_v1.shp</code>) under <code>Tile_Index</code>. It is not the final project GDB. During final delivery assembly this SHP is imported as the <code>TILES</code> feature class together with the other GDB products.</p>
+<p><strong>Circuits only:</strong> Retiler creates an <strong>intermediate shapefile</strong> named using the circuit, year and version (for example <code>9L137_2026_Tiles_v1.shp</code>) under <code>Tile_Index</code>. It is not the final project GDB. During final delivery assembly this SHP is imported as the <code>TILES</code> feature class together with the other GDB products.</p>
 <h3>TX SHP fields</h3>
 <table><tr><th>Field</th><th>Meaning / source</th></tr>
 <tr><td>BlockNum</td><td>Stable sequential tile ID derived from the approved central segment.</td></tr>
@@ -116,8 +131,8 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <tr><td>QA\LiDAR</td><td>Source inventory, processing report, Return 0 / Synthetic-by-class report and execution metadata.</td></tr>
 <tr><td>QA\LiDAR\EzLAS</td><td>EzLAS conversion/verification logs, command records and validation CSV.</td></tr>
 <tr><td>QA\TILES</td><td>Tile Index attribute export and schema JSON.</td></tr></table>
-<p><strong>Run Build</strong> overwrites selected existing products after confirmation. <strong>Rerun Missing</strong> fills only missing/invalid products where possible. QA should be reviewed before assuming a rerun is required.</p>
+<p><strong>Process</strong> overwrites selected existing products after confirmation. <strong>Process Missing</strong> fills only missing/invalid products where possible. QA should be reviewed before assuming a rerun is required. Validation source badges do not replace imagery/LiDAR QA.</p>
 </section>
 
-<p class="small">ATCO Retiler v1.07 · Bugs, improvements and issues: pit@nmgroup.com</p>
+<p class="small">ATCO Retiler v1.08-dev · Bugs, improvements and issues: pit@nmgroup.com</p>
 </main></body></html>
