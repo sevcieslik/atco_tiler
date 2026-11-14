@@ -547,15 +547,25 @@ def gps_time_range(laz_path: Path):
 def load_trajectory_index():
     path = TRAJECTORY_ROOT / 'trajectory_index.parquet'
     if not path.is_file():
+        print('NOTE: TX trajectory index missing; fldate/Flightline will be blank.', flush=True)
         return None
     try:
+        import pyarrow  # noqa: F401 - optional, not part of the base GIS runtime
+    except ImportError as exc:
+        raise RuntimeError(
+            'TX trajectory attribution needs optional PyArrow. Run '
+            'INSTALL_TRAJECTORY_SUPPORT.bat and retry. '
+            'Without it the Tile Index would have missing flight metadata.'
+        ) from exc
+    try:
         df = pd.read_parquet(path)
-        required = {'date_from_folder', 'flightline_code', 'las_adjusted_gps_start', 'las_adjusted_gps_end'}
-        if not required.issubset(df.columns):
-            return None
-        return df
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f'Cannot read TX trajectory index: {path}: {exc}') from exc
+    required = {'date_from_folder', 'flightline_code',
+                'las_adjusted_gps_start', 'las_adjusted_gps_end'}
+    if not required.issubset(df.columns):
+        raise ValueError(f'Trajectory index missing columns {required - set(df.columns)}: {path}')
+    return df
 
 
 def trajectory_attributes(laz_path: Path, trajectory_index):
