@@ -50,7 +50,14 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertIn("QA & Reports", self.app.pages)
         self.assertIn("How to Start", self.app.pages)
         self.assertTrue(self.app.commit_badge["text"].startswith("Commit"))
-        self.assertEqual(str(self.app.run_btn["state"]), "normal")
+        self.assertEqual(str(self.app.run_btn["state"]), "disabled")
+
+    def test_processing_requires_local_validation(self):
+        self.assertFalse(self.app.input_validated)
+        self.assertEqual(self.app.aoi_list.size(), 0)
+        self.assertEqual(self.app.run_btn["text"], "▶  Process")
+        self.assertEqual(self.app.validate_btn["text"], "✓  Validate Input")
+        self.assertEqual(self.app.run_btn["state"], "disabled")
 
     def test_select_all_and_dependencies(self):
         self.app.set_all_products(False)
