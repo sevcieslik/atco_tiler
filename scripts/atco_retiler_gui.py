@@ -1154,6 +1154,8 @@ class RetilerApp(tk.Tk):
             return
         self.refresh_mapping()
         selected = self.selected_products()
+        if self.process_mode.get() == "converter":
+            selected = [p for p in selected if p != "Tile Index"]
         if not selected:
             messagebox.showwarning(APP_NAME, "Select at least one product to build.")
             return
@@ -1195,6 +1197,7 @@ class RetilerApp(tk.Tk):
                     return
 
         self.running = True
+        self.aoi_list.configure(state="disabled")
         for check in self.product_checks.values():
             check.configure(state="disabled")
         self.paused = False
@@ -1213,54 +1216,76 @@ class RetilerApp(tk.Tk):
         self.session_created = {k: 0 for k in self.session_created}
         self.log(f"{'RERUN MISSING' if rerun else 'FULL BUILD'} - {self.context[0]} / {self.context[1]}", "INFO")
 
-        th = threading.Thread(target=self._build_worker, args=(rerun,selected,gm), daemon=True)
+        mode = self.process_mode.get()
+        records = list(self.entity_records)
+        th = threading.Thread(target=self._build_worker, args=(rerun,selected,gm,mode,records), daemon=True)
         th.start()
 
-    def _build_worker(self, rerun, selected, gm):
+    def _build_worker(self, rerun, selected, gm, mode, records):
         try:
             env = os.environ.copy()
-            env["ATCO_PARALLEL_WORKERS"] = str(int(self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2))))
+            env["ATCO_PARALLEL_WORKERS"] = str(int(
+                self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2))))
             overwrite = [] if rerun else ["--overwrite"]
-
-            # Imagery
-            if any(x in selected for x in ("TIFF","ECW")):
-                args = [
-                    sys.executable, str(MODULES/"process_orthos.py"),
-                    "--aoi", str(self.mapped["aoi"]),
-                    "--source", str(self.mapped["orthos"]),
-                    "--output-root", str(self.output_root),
-                    *overwrite,
-                ]
-                if "ECW" in selected:
-                    args += ["--global-mapper-exe", str(gm)]
-                else:
-                    args += ["--tiff-only"]
-                rc = self._run_stream(args, env=env)
-                if rc:
-                    raise RuntimeError(f"Imagery processor failed with exit code {rc}")
-
-            # LiDAR / Tile Index SHP
-            if any(x in selected for x in ("LAZ","zLAS","Tile Index")):
-                args = [
-                    sys.executable, str(MODULES/"process_lidar.py"),
-                    "--aoi", str(self.mapped["aoi"]),
-                    "--output-root", str(self.output_root),
-                    *overwrite,
-                ]
-                if any(x in selected for x in ("LAZ","zLAS")):
-                    args += ["--source", str(self.mapped["point_cloud"])]
-                if "zLAS" in selected:
-                    args += ["--zlas","--ezlas-exe",str(EZLAS)]
-                if "Tile Index" in selected:
-                    args += ["--tile-index"]
-                rc = self._run_stream(args, env=env)
-                if rc:
-                    raise RuntimeError(f"LiDAR processor failed with exit code {rc}")
-
+            for idx, record in enumerate(records, 1):
+                if self.stop_requested:
+                    break
+                aoi = str(record["path"])
+                self.log_queue.put(("LINE",
+                    f"ENTITY {idx}/{len(records)}: {record['entity']} ({mode})"))
+                if mode == "converter":
+                    products = [p for p in selected if p != "Tile Index"]
+                    args = [
+                        sys.executable, str(MODULES / "process_aoi_converter.py"),
+                        "--aoi", aoi, "--output-root", str(self.output_root), *overwrite,
+                    ]
+                    if any(p in products for p in ("TIFF", "ECW")):
+                        args += ["--ortho-source", str(self.mapped["orthos"])]
+                    if any(p in products for p in ("LAZ", "zLAS")):
+                        args += ["--cloud-source", str(self.mapped["point_cloud"])]
+                    for product in products:
+                        args.append("--" + product.lower())
+                    if "ECW" in products:
+                        args += ["--global-mapper-exe", str(gm)]
+                    if "zLAS" in products:
+                        args += ["--ezlas-exe", str(EZLAS)]
+                    rc = self._run_stream(args, env=env)
+                    if rc:
+                        raise RuntimeError(f"Converter failed for {record['entity']} (exit {rc})")
+                    continue
+                if any(p in selected for p in ("TIFF", "ECW")):
+                    args = [
+                        sys.executable, str(MODULES / "process_orthos.py"),
+                        "--aoi", aoi, "--source", str(self.mapped["orthos"]),
+                        "--output-root", str(self.output_root), *overwrite,
+                    ]
+                    if "ECW" in selected:
+                        args += ["--global-mapper-exe", str(gm)]
+                    else:
+                        args += ["--tiff-only"]
+                    rc = self._run_stream(args, env=env)
+                    if rc:
+                        raise RuntimeError(f"Imagery failed for {record['entity']} (exit {rc})")
+                if self.stop_requested:
+                    break
+                if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")):
+                    args = [
+                        sys.executable, str(MODULES / "process_lidar.py"),
+                        "--aoi", aoi, "--output-root", str(self.output_root), *overwrite,
+                    ]
+                    if any(p in selected for p in ("LAZ", "zLAS")):
+                        args += ["--source", str(self.mapped["point_cloud"])]
+                    if "zLAS" in selected:
+                        args += ["--zlas", "--ezlas-exe", str(EZLAS)]
+                    if "Tile Index" in selected:
+                        args += ["--tile-index"]
+                    rc = self._run_stream(args, env=env)
+                    if rc:
+                        raise RuntimeError(f"LiDAR failed for {record['entity']} (exit {rc})")
             if self.stop_requested:
                 self.log_queue.put(("STOP", "Build stopped by operator"))
             else:
-                self.log_queue.put(("DONE", "Build complete"))
+                self.log_queue.put(("DONE", f"Build complete: {len(records)} entities"))
         except Exception as exc:
             if self.stop_requested:
                 self.log_queue.put(("STOP", "Build stopped by operator"))
@@ -1548,6 +1573,7 @@ class RetilerApp(tk.Tk):
         self.stop_requested = False
         self.run_btn.configure(state="normal")
         self.rerun_btn.configure(state="normal")
+        self.aoi_list.configure(state="normal")
         for check in self.product_checks.values():
             check.configure(state="normal")
         self._sync_product_selection()
