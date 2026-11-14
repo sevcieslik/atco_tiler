@@ -559,6 +559,12 @@ class RetilerApp(tk.Tk):
                                 padx=16, pady=(0, 7))
         self._dashboard_button(setup, "Open Output", self.open_output).grid(
             row=2, column=2, sticky="e", padx=(8, 6), pady=(0, 7))
+        # Validation is part of local input setup, directly below its three
+        # readiness indicators; status stays grey until validation succeeds.
+        self.validate_btn = self._dashboard_button(
+            setup, "✓  Validate Input", self.validate_setup)
+        self.validate_btn.grid(row=2, column=3, sticky="ew",
+                               padx=(18, 14), pady=(0, 7))
 
         # Entity selection belongs to Project Setup, not a second mode section.
         entity_area = tk.Frame(setup, bg=CARD)
@@ -659,13 +665,10 @@ class RetilerApp(tk.Tk):
         self.stop_btn = self._dashboard_button(actions, "■  Stop", self.stop_build)
         self.stop_btn.configure(state="disabled")
         self.stop_btn.grid(row=1, column=1, sticky="ew", padx=(5, 14), pady=(0, 7))
-        self.validate_btn = self._dashboard_button(actions, "✓  Validate Input", self.validate_setup)
-        self.validate_btn.grid(row=2, column=0, columnspan=2, sticky="ew",
-                               padx=14, pady=(0, 12))
         tk.Frame(actions, bg=BORDER, height=1).grid(
-            row=3, column=0, columnspan=2, sticky="ew", padx=14)
+            row=2, column=0, columnspan=2, sticky="ew", padx=14, pady=(8, 0))
         details = tk.Frame(actions, bg=CARD)
-        details.grid(row=4, column=0, columnspan=2, sticky="nsew", padx=14, pady=(8, 6))
+        details.grid(row=3, column=0, columnspan=2, sticky="nsew", padx=14, pady=(8, 6))
         details.grid_columnconfigure(1, weight=1)
         self.detail_values = {}
         detail_rows = (
@@ -1027,14 +1030,7 @@ class RetilerApp(tk.Tk):
         self.mapped = (core.map_input(self.input_root)
                        if self.input_root and self.input_root.is_dir()
                        else {"aoi": None, "orthos": None, "point_cloud": None})
-        for w in self.mapping_chip_frame.winfo_children():
-            w.destroy()
-        for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
-                           ("point_cloud", "Point Cloud (LiDAR)")):
-            ok = self.mapped.get(key) is not None
-            self.badge(self.mapping_chip_frame,
-                       f"{'●' if ok else '○'}  {label}",
-                       "ok" if ok else "bad").pack(side="top", anchor="w", pady=3)
+        self._set_input_badges({key: "pending" for key in ("aoi", "orthos", "point_cloud")})
         for w in self.mapping_detail.winfo_children():
             w.destroy()
         for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
@@ -1054,8 +1050,25 @@ class RetilerApp(tk.Tk):
                 text=f"{self.source_tiff_count} + {self.source_lidar_count}")
         self.refresh_product_status()
 
+    def _set_input_badges(self, states):
+        """Three indicators are grey until their content passes validation."""
+        for child in self.mapping_chip_frame.winfo_children():
+            child.destroy()
+        self.input_badge_states = dict(states)
+        for key, label in (("aoi", "AOI"), ("orthos", "Orthos"),
+                           ("point_cloud", "Point Cloud (LiDAR)")):
+            state = states.get(key, "pending")
+            symbol = "●" if state == "validated" else ("×" if state == "error" else "○")
+            style = ("ok" if state == "validated"
+                     else "bad" if state == "error" else "muted")
+            self.badge(self.mapping_chip_frame, f"{symbol}  {label}", style).pack(
+                side="top", anchor="w", pady=3)
+
     def _invalidate_input_validation(self):
         self.input_validated = False
+        if hasattr(self, "mapping_chip_frame"):
+            self._set_input_badges({key: "pending" for key in
+                                    ("aoi", "orthos", "point_cloud")})
         self.context = None
         self.blocks = []
         self.cloud_blocks = []
@@ -1074,6 +1087,15 @@ class RetilerApp(tk.Tk):
     def _apply_eligible_entities(self, eligible, excluded):
         """Called on the UI thread after spatial checks complete."""
         self.validating = False
+        used = {
+            "aoi": True,
+            "orthos": any(p in self._validation_products for p in ("TIFF", "ECW")),
+            "point_cloud": any(p in self._validation_products for p in ("LAZ", "zLAS")),
+        }
+        self._set_input_badges({
+            key: "validated" if used[key] and self.mapped.get(key) else "pending"
+            for key in used
+        })
         self.validate_btn.configure(state="normal", text="✓  Validate Input")
         self.aoi_options = list(eligible)
         self.aoi_list.delete(0, "end")
@@ -1675,6 +1697,10 @@ class RetilerApp(tk.Tk):
                 elif kind == "VALIDATE_FAIL":
                     self.validating = False
                     self.validate_btn.configure(state="normal", text="✓  Validate Input")
+                    self._set_input_badges({
+                        key: "error" if self.mapped.get(key) else "pending"
+                        for key in ("aoi", "orthos", "point_cloud")
+                    })
                     self.log(f"Validation failed: {payload}", "ERROR")
                     messagebox.showerror(APP_NAME, f"Input validation failed:\\n\\n{payload}")
                 elif kind == "ENTITY_DONE":
@@ -1742,6 +1768,7 @@ class RetilerApp(tk.Tk):
             messagebox.showwarning(APP_NAME, "Input/point_cloud is missing.")
             return
         self.validating = True
+        self._validation_products = tuple(selected)
         self.validate_btn.configure(state="disabled", text="Checking coverage...")
         self.log("VALIDATE: indexing local AOI, image footprints, and LiDAR footprints "
                  "against central AOI revisions...", "INFO")
