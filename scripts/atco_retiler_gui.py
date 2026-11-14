@@ -648,7 +648,7 @@ class RetilerApp(tk.Tk):
         actions.grid_columnconfigure(0, weight=1)
         actions.grid_columnconfigure(1, weight=1)
         self.run_btn = self._dashboard_button(
-            actions, "▶  Process", lambda: self.start_build(False), primary=True
+            actions, "▶  Process", lambda: self.start_build(False), primary=True)
         self.run_btn.grid(row=0, column=0, sticky="ew", padx=(14, 5), pady=(4, 7))
         self.rerun_btn = self._dashboard_button(
             actions, "↻  Process Missing", lambda: self.start_build(True))
