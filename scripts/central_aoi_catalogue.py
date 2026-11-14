@@ -1,7 +1,8 @@
-"""Read-only unified AOI catalogue for GUI and processing dispatch.
+"""Read the existing ATCO operational AOI registry (no schema migrations).
 
-Circuits stay authoritative in existing entities/revisions tables.
-Telecoms and substations live in standalone_aoi_registry in the same DB.
+Uses the original entities/revisions schema from tools/atco_aoi_db.py.
+Only current revisions are offered for delivery. Circuits continue to use
+approved published segment indexes. Areas are single whole-polygon outputs.
 """
 from __future__ import annotations
 
@@ -13,55 +14,65 @@ from pyproj import CRS
 from shapely import wkb
 from shapely.ops import unary_union
 
-from import_standalone_aois import DEFAULT_DB, TABLE
+DEFAULT_DB = Path(r"W:\APPS\PIT\ATCO\database\atco_aoi_master.sqlite")
 
 
 def get_standalone_records(db: Path = DEFAULT_DB):
-    if not Path(db).is_file():
+    """List current entity_kind='area' entries from existing entities/revisions."""
+    db = Path(db)
+    if not db.is_file():
         return []
     with sqlite3.connect(str(db)) as con:
         con.execute("PRAGMA query_only=ON")
-        if not con.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
-                           (TABLE,)).fetchone():
-            return []
         rows = con.execute(
-            f"SELECT entity_kind,entity_id,revision,source_shp,crs_wkt,polygon_wkb "
-            f"FROM {TABLE} ORDER BY entity_kind,entity_id,revision"
+            """SELECT e.entity_id, r.revision_code, r.polygon_source,
+                      r.crs_wkt, r.polygon_wkb, r.id, r.source_version
+               FROM entities e
+               JOIN revisions r ON r.id = e.current_revision
+               WHERE e.entity_kind = 'area' AND r.entity_kind = 'area'
+                 AND r.entity_id = e.entity_id
+               ORDER BY e.entity_id"""
         ).fetchall()
-    items = []
-    for kind, entity, revision, source, crs_wkt, polygon in rows:
-        items.append(dict(kind=kind, entity=entity, revision=revision,
-                          path=Path(source), crs_wkt=crs_wkt, polygon_wkb=polygon,
-                          has_segments=False))
-    # Retain the newest registered version per entity.
-    newest = {}
-    for item in items:
-        key = item["kind"], item["entity"].casefold()
-        if key not in newest or int(item["revision"].lstrip("v")) > int(newest[key]["revision"].lstrip("v")):
-            newest[key] = item
-    return sorted(newest.values(), key=lambda x: (x["kind"], x["entity"].casefold()))
+    return [
+        dict(kind="area", entity=entity, revision=revision,
+             path=Path(source), crs_wkt=crs_wkt, polygon_wkb=polygon,
+             revision_id=rid, source_version=version, has_segments=False)
+        for entity, revision, source, crs_wkt, polygon, rid, version in rows
+    ]
 
 
 def validate_standalone(record):
+    """Require exact registered geometry and current revision before processing.
+
+    The original publishing tool owns edits, versioning, and source snapshots.
+    This function is read-only; never publish revised geometry here.
+    """
     path = Path(record["path"])
     if not path.is_file():
-        raise FileNotFoundError(f"Registered AOI source file unavailable: {path}")
+        raise FileNotFoundError(f"Registered AOI source unavailable: {path}")
     frame = gpd.read_file(path)
     if frame.empty or not frame.crs or not frame.geometry.is_valid.all():
         raise ValueError(f"Invalid registered AOI shapefile: {path}")
     kinds = frame.geometry.geom_type.dropna()
-    if kinds.empty or not kinds.isin(("Polygon","MultiPolygon")).all():
-        raise ValueError(f"Registered AOI is not polygonal: {path}")
-    selected_geom = unary_union([g for g in frame.geometry if g is not None and not g.is_empty])
-    local_crs = CRS.from_user_input(frame.crs)
+    if kinds.empty or not kinds.isin(("Polygon", "MultiPolygon")).all():
+        raise ValueError(f"Registered AOI must contain polygons: {path}")
+    selected_geom = unary_union(
+        [g for g in frame.geometry if g is not None and not g.is_empty]
+    )
+    if selected_geom.is_empty:
+        raise ValueError(f"Empty registered AOI: {path}")
+    selected_crs = CRS.from_user_input(frame.crs)
     reference_crs = CRS.from_wkt(record["crs_wkt"])
-    if not local_crs.equals(reference_crs):
-        selected_geom = gpd.GeoSeries([selected_geom], crs=local_crs).to_crs(reference_crs).iloc[0]
+    if not selected_crs.equals(reference_crs):
+        selected_geom = gpd.GeoSeries(
+            [selected_geom], crs=selected_crs
+        ).to_crs(reference_crs).iloc[0]
     registered_geom = wkb.loads(record["polygon_wkb"])
     difference = registered_geom.symmetric_difference(selected_geom).area
     if difference > 0.05:
         raise RuntimeError(
-            f"AOI VERSION MISMATCH: {record['entity']} {record['revision']} changed "
-            f"since import ({difference:.3f} coordinate units squared). "
-            "Publish a new registry version before delivery.")
+            f"AOI VERSION MISMATCH: {record['entity']} {record['revision']} "
+            f"differs from central polygon by {difference:.3f} square map units. "
+            "Publish a new revision using the existing ATCO AOI Registry."
+        )
     return selected_geom, reference_crs
