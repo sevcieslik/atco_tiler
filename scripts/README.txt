@@ -167,9 +167,34 @@ and revisions table and verifies the source polygon is still identical
 to the currently published revision (including selected GPKG/GDB layers).
 Any AOI revision must be published using the original registry tools.
 
-After publishing, restart the Retiler or refresh source mapping. The GUI
-shows registered area entries alongside local circuit AOIs but never selects
-all area entries automatically. The operator selects intended entities.
+After publishing, the Retiler uses the registry ONLY as a read-only
+spatial reference. It never displays a full catalogue of W: polygons or
+automatically selects registered areas.
+
+Input-first workflow (v1.08)
+----------------------------
+1. Populate local Input/aoi, Input/orthos and Input/point_cloud.
+2. Select deliverable products.
+3. Click VALIDATE INPUT. This indexes local polygon AOIs and raster/LiDAR
+   footprint extents and matches them against current central registry
+   geometries. A circuit requires an exact locally provided approved AOI;
+   an area requires at least 99% polygon coverage by the local AOI.
+   Selected imagery and cloud sources must also cover at least 99% of the AOI.
+4. Only eligible entity IDs, kinds and revision codes appear in the
+   selection list. The operator may select more than one.
+5. Click PROCESS, or PROCESS MISSING for incomplete previous outputs.
+
+A passing footprint preflight is NOT per-pixel/per-point validation: white
+imagery or gaps within a file footprint are still subject to normal
+processing and QA. Missing imagery/LiDAR coverage is rejected before
+processing. Validation runs off the Tkinter UI thread.
+Changing source inputs or requested products requires revalidation.
+
+Area processing loads its authoritative current geometry from the central
+revision, but the eligibility decision is based only on the local source
+extent and local AOI. Remote file paths are never shown in the operator's
+eligible-entity list.
+
 
 Note: No central database writes or source polygons are performed by
 the Retiler itself. This feature requires W: access and Windows UAT before
