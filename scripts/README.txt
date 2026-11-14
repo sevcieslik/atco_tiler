@@ -140,3 +140,40 @@ as v1.08 cached output. Rebuild using Full Build to generate new folders.
 Large-area imagery is written as one windowed BigTIFF with NoData=255,
 without loading the complete AOI into RAM. A full-area TIFF is still very
 large on disk; ECW also requires an RGB intermediate and Global Mapper.
+
+Unified AOI Registry (v1.08-dev)
+--------------------------------
+There is no manual TX/DX versus Telecom/Substation switch.
+The Build page lists:
+* Circuit AOIs in Input\\aoi, validated against the central entities/revisions
+  table and the published segments under W:\\APPS\\PIT\\ATCO\\segments.
+* Registered Substation/Telecom AOIs from the standalone_aoi_registry table
+  in the SAME central database W:\\APPS\\PIT\\ATCO\\database\\atco_aoi_master.sqlite.
+  These are automatically treated as single-area outputs (no segments).
+All deliverables are grouped by entity. The separate _segments and _area
+product folders are retained to keep products from different geometry coverage
+schemes isolated; operators do not have to select a processing mode.
+
+To register the source polygons from the ATCO area products folder,
+run from a Windows workstation with W: access, with Retiler CLOSED:
+
+  scripts\\.venv\\python.exe scripts\\import_standalone_aois.py ^
+    --source "W:\\NMCP26054\\products\\area" ^
+    --report "D:\\ATCO\\standalone_aoi_import_report.json"
+
+This first command only INSPECTS sources and writes a report (dry-run).
+Review detected entity names, versions and any rejected files. Once correct:
+
+  scripts\\.venv\\python.exe scripts\\import_standalone_aois.py ^
+    --source "W:\\NMCP26054\\products\\area" ^
+    --report "D:\\ATCO\\standalone_aoi_import_report_applied.json" ^
+    --apply
+
+The importer makes a timestamped database backup before a single SQLite
+transaction. It never changes existing circuit entities/revisions. It refuses
+invalid/duplicate sources, missing CRS, and edits to already published AOIs.
+When a source polygon changes, publish a new v2/v3 in the source hierarchy
+instead of modifying a registered v1 in place.
+After successful import, restart Retiler or refresh the input source mapping
+to see new registry entries. Only the first local circuit is selected on
+initial launch, never all registered entities.
