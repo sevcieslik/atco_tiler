@@ -1199,8 +1199,6 @@ class RetilerApp(tk.Tk):
             return
         self.refresh_mapping()
         selected = self.selected_products()
-        if self.process_mode.get() == "converter":
-            selected = [p for p in selected if p != "Tile Index"]
         if not selected:
             messagebox.showwarning(APP_NAME, "Select at least one product to build.")
             return
@@ -1244,8 +1242,6 @@ class RetilerApp(tk.Tk):
                     return
 
         self.running = True
-        for radio in self.mode_buttons:
-            radio.configure(state="disabled")
         self.aoi_list.configure(state="disabled")
         for check in self.product_checks.values():
             check.configure(state="disabled")
@@ -1265,18 +1261,17 @@ class RetilerApp(tk.Tk):
         self.session_created = {k: 0 for k in self.session_created}
         self.log(f"{'RERUN MISSING' if rerun else 'FULL BUILD'} - {self.context[0]} / {self.context[1]}", "INFO")
 
-        mode = self.process_mode.get()
         records = list(self.entity_records)
         input_sources = dict(self.mapped)
         output_root = Path(self.output_root)
         workers = int(self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2)))
         th = threading.Thread(
             target=self._build_worker,
-            args=(rerun, selected, gm, mode, records, input_sources, output_root, workers),
+            args=(rerun, selected, gm, records, input_sources, output_root, workers),
             daemon=True)
         th.start()
 
-    def _build_worker(self, rerun, selected, gm, mode, records, input_sources, output_root, workers):
+    def _build_worker(self, rerun, selected, gm, records, input_sources, output_root, workers):
         try:
             env = os.environ.copy()
             env["ATCO_PARALLEL_WORKERS"] = str(workers)
@@ -1298,12 +1293,14 @@ class RetilerApp(tk.Tk):
                     break
                 aoi = str(record["path"])
                 self.log_queue.put(("LINE",
-                    f"ENTITY {idx}/{len(records)}: {record['entity']} ({mode})"))
-                if mode == "converter":
+                    f"ENTITY {idx}/{len(records)}: {record['entity']} ({record['kind']})"))
+                if not record["has_segments"]:
                     products = [p for p in selected if p != "Tile Index"]
                     args = [
                         sys.executable, str(MODULES / "process_aoi_converter.py"),
-                        "--aoi", aoi, "--output-root", str(output_root), *overwrite,
+                        "--aoi", aoi, "--entity", record["entity"],
+                        "--revision", record["revision"],
+                        "--output-root", str(output_root), *overwrite,
                     ]
                     if any(p in products for p in ("TIFF", "ECW")):
                         args += ["--ortho-source", str(input_sources["orthos"])]
@@ -1664,11 +1661,9 @@ class RetilerApp(tk.Tk):
         self.run_btn.configure(state="normal")
         self.rerun_btn.configure(state="normal")
         self.aoi_list.configure(state="normal")
-        for radio in self.mode_buttons:
-            radio.configure(state="normal")
         for name, check in self.product_checks.items():
-            check.configure(state="disabled" if self.process_mode.get() == "converter"
-                            and name == "Tile Index" else "normal")
+            check.configure(state="disabled" if name == "Tile Index" and not self.has_segmented_entities()
+                            else "normal")
         self._sync_product_selection()
         self.pause_btn.configure(state="disabled", text="⏸  Pause")
         self.stop_btn.configure(state="disabled")
@@ -1685,13 +1680,12 @@ class RetilerApp(tk.Tk):
     # ---------- validation/settings/QA ----------
     def validate_setup(self):
         """Validate only dependencies needed by selected workflow/products."""
-        self.log("Validating selected mode, runtime and sources...", "INFO")
+        self.log("Validating selected entities, runtime and sources...", "INFO")
         checks = []
-        standard = self.process_mode.get() == "standard"
         selected = self.selected_products()
-        if standard:
-            checks.append(("Central AOI DB",
-                           (core.CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite").is_file()))
+        checks.append(("Central AOI DB",
+                       (core.CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite").is_file()))
+        if self.has_segmented_entities():
             checks.append(("Central Segments",
                            (core.CENTRAL_ROOT / "segments" / "circuit").is_dir()))
         checks.append(("AOI selected / valid", bool(self.entity_records)))
