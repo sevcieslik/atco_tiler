@@ -236,6 +236,10 @@ class RetilerApp(tk.Tk):
         self.mapped = {"aoi": None, "orthos": None, "point_cloud": None}
         self.context = None
         self.blocks = []
+        self.cloud_blocks = []
+        self.entity_records = []
+        self.aoi_options = []
+        self.process_mode = tk.StringVar(value=self.cfg.get("processing_mode", "standard"))
         self.running = False
         self.paused = False
         self.process = None
@@ -550,6 +554,39 @@ class RetilerApp(tk.Tk):
                                 padx=16, pady=(0, 7))
         self._dashboard_button(setup, "Open Output", self.open_output).grid(
             row=2, column=2, sticky="e", padx=(8, 6), pady=(0, 7))
+
+        # v1.08: explicit mode and multi-AOI selection.
+        mode_outer, mode_body = self.card(page, "Processing Mode & Entities")
+        mode_outer.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
+        mode_row = tk.Frame(mode_body, bg=CARD)
+        mode_row.pack(fill="x", padx=16, pady=(0, 6))
+        for value, label in (
+            ("standard", "Standard Retiler (TX / DX, central segments)"),
+            ("converter", "AOI Converter (Telecoms / Substations, no segments)"),
+        ):
+            tk.Radiobutton(
+                mode_row, text=label, value=value, variable=self.process_mode,
+                command=self._mode_changed, bg=CARD, fg=TEXT,
+                selectcolor=NAV_2, activebackground=CARD, activeforeground=TEXT,
+                font=("Segoe UI", 10),
+            ).pack(side="left", padx=(0, 25))
+        row = tk.Frame(mode_body, bg=CARD)
+        row.pack(fill="x", padx=16, pady=(0, 12))
+        self._dashboard_label(row, "Entities to process (Ctrl/Shift for multiple):",
+                              size=9, color=MUTED).pack(anchor="w")
+        self.aoi_list = tk.Listbox(
+            row, selectmode=tk.EXTENDED, exportselection=False, height=4,
+            bg=NAV_2, fg=TEXT, selectbackground=GREEN_DARK,
+            selectforeground="#ffffff", font=("Consolas", 10), relief="flat")
+        self.aoi_list.pack(fill="x", expand=True, pady=(5, 0))
+        self.aoi_list.bind("<<ListboxSelect>>", lambda _event: self._update_aoi_context())
+        tools_row = tk.Frame(row, bg=CARD)
+        tools_row.pack(fill="x", pady=(6, 0))
+        tk.Button(tools_row, text="Select All", command=self._select_all_aois,
+                  bg=ROW_BG, fg=TEXT, relief="flat", padx=10).pack(side="left")
+        self._dashboard_label(
+            tools_row, "Each entity is validated and delivered independently.",
+            size=9, color=MUTED).pack(side="left", padx=14)
 
         # Progress table: checkboxes are the authoritative product selectors.
         progress_outer, progress = self.card(page, "Products & Progress")
@@ -869,6 +906,75 @@ class RetilerApp(tk.Tk):
         )
         if p:
             self.gm_var.set(p)
+
+    def _mode_changed(self):
+        self.cfg["processing_mode"] = self.process_mode.get()
+        core.save_config(self.cfg)
+        if self.process_mode.get() == "converter":
+            self.product_vars["Tile Index"].set(False)
+        self._sync_product_selection()
+        self.refresh_mapping()
+
+    def _select_all_aois(self):
+        self.aoi_list.selection_set(0, "end")
+        self._update_aoi_context()
+
+    def selected_aois(self):
+        return [self.aoi_options[i] for i in self.aoi_list.curselection()
+                if i < len(self.aoi_options)]
+
+    def _update_aoi_context(self):
+        self.context = None
+        self.blocks = []
+        self.cloud_blocks = []
+        self.entity_records = []
+        selected = self.selected_aois()
+        if not selected:
+            self.context_label.configure(text="Select one or more AOIs")
+        else:
+            try:
+                sys.path.insert(0, str(MODULES))
+                import process_orthos as po
+                from atco_delivery import YEAR, TILE_VERSION
+                mode = self.process_mode.get()
+                for shp in selected:
+                    entity = po.circuit_from_polygon(shp) if shp.stem.lower().endswith("_polygon") else shp.stem
+                    if mode == "standard":
+                        rec = po.load_aoi_revision(entity, shp)
+                        _, seg = po.load_segments(entity, rec["revision_code"])
+                        imagery = [str(v) for v in seg["ImageryName"]]
+                        cloud = [str(v) for v in seg["PointCloudName"]]
+                        revision = rec["revision_code"]
+                    else:
+                        from process_aoi_converter import read_aoi
+                        read_aoi(shp)
+                        imagery = [f"{entity}_{YEAR}_{TILE_VERSION}"]
+                        cloud = imagery[:]
+                        revision = "Standalone"
+                    self.entity_records.append({
+                        "path": shp, "entity": entity, "revision": revision,
+                        "imagery": imagery, "cloud": cloud,
+                    })
+                    self.blocks.extend(imagery)
+                    self.cloud_blocks.extend(cloud)
+                first = self.entity_records[0]
+                self.context = (first["entity"], first["revision"])
+                self.context_label.configure(
+                    text=f"{len(self.entity_records)} entity(s) selected | "
+                         + ", ".join(r["entity"] for r in self.entity_records[:5]))
+            except Exception as exc:
+                self.context_label.configure(text="AOI validation error")
+                self.log(f"AOI preflight: {exc}", "WARN")
+                self.context = None
+                self.blocks = []
+                self.cloud_blocks = []
+                self.entity_records = []
+        if hasattr(self, "summary_values"):
+            self.summary_values["project"].configure(
+                text=f"{len(self.entity_records)} entities" if self.entity_records else "Awaiting input")
+            self.summary_values["segments"].configure(
+                text=str(len(self.blocks)) if self.blocks else "—")
+        self.refresh_product_status()
 
     def refresh_mapping(self):
         self.input_entry.delete(0,"end")
