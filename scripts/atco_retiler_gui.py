@@ -25,6 +25,7 @@ DOCS = TOOL_ROOT / "docs"
 
 sys.path.insert(0, str(TOOL_ROOT))
 import atco_processor as core
+from atco_delivery import product_folder
 
 APP_NAME = "ATCO Retiler"
 APP_VERSION = "1.08-dev"
@@ -1071,8 +1072,9 @@ class RetilerApp(tk.Tk):
             ):
                 names = record["cloud"] if product in ("LAZ", "zLAS") else record["imagery"]
                 counts[product][0] += len(names)
+                target_folder = product_folder(product, converter=converter)
                 counts[product][1] += sum(
-                    1 for name in names if self._is_valid_file(base / folder / f"{name}{ext}"))
+                    1 for name in names if self._is_valid_file(base / target_folder / f"{name}{ext}"))
             if not converter:
                 shp = core.tile_index_shp_path(base, entity)
                 counts["Tile Index"][0] += 1
@@ -1429,7 +1431,8 @@ class RetilerApp(tk.Tk):
                         p.unlink()
                 except OSError:
                     pass
-            for folder in (base / "TIFF", base / "ECW", base / "LAZ", base / "zLAS"):
+            for folder in (base / name for product in ("TIFF", "ECW", "LAZ", "zLAS")
+                           for name in (product_folder(product), product_folder(product, converter=True))):
                 if folder.is_dir():
                     for p in folder.iterdir():
                         try:
