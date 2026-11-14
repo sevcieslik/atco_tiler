@@ -47,19 +47,33 @@ def delivery_tile_prefix(entity: str) -> str:
     return f"{client_entity_name(entity)}_{YEAR}_Tiles_{TILE_VERSION}"
 
 
+def delivery_imagery_name(entity: str, blocknum: str) -> str:
+    """Client imagery schema: <Circuit>_<TileID>_<Year>_<5cm_RGBN>_<version>."""
+    return f"{client_entity_name(entity)}_{tile_sequence(blocknum)}_{YEAR}_5cm_RGBN_{TILE_VERSION}"
+
+
+def delivery_point_cloud_name(entity: str, blocknum: str) -> str:
+    """Client classified cloud schema: <Circuit>_<TileID>_<version>."""
+    return f"{client_entity_name(entity)}_{tile_sequence(blocknum)}_{TILE_VERSION}"
+
+
 def delivery_tile_name(entity: str, blocknum: str) -> str:
-    """Tiled TIFF/ECW/LAZ/zLAS filename stem, including approved block sequence."""
-    return f"{delivery_tile_prefix(entity)}_{tile_sequence(blocknum)}"
+    """Compatibility alias for the imagery name; use product-specific names elsewhere."""
+    return delivery_imagery_name(entity, blocknum)
 
 
 def enrich_segments(seg, entity: str):
     out = seg.copy()
     out["CentralBlock"] = out["BlockNum"].astype(str)
     out["TileSeq"] = out["CentralBlock"].map(tile_sequence)
-    out["DeliveryName"] = out["CentralBlock"].map(lambda b: delivery_tile_name(entity, b))
-    if out["DeliveryName"].duplicated().any():
-        dupes = out.loc[out["DeliveryName"].duplicated(False), "DeliveryName"].tolist()
-        raise ValueError(f"Duplicate delivery tile names derived from central segments: {dupes[:10]}")
+    out["ImageryName"] = out["CentralBlock"].map(lambda b: delivery_imagery_name(entity, b))
+    out["PointCloudName"] = out["CentralBlock"].map(lambda b: delivery_point_cloud_name(entity, b))
+    # Retain the imagery compatibility field for existing ortho processing.
+    out["DeliveryName"] = out["ImageryName"]
+    for col in ("ImageryName", "PointCloudName"):
+        if out[col].duplicated().any():
+            dupes = out.loc[out[col].duplicated(False), col].tolist()
+            raise ValueError(f"Duplicate {col} derived from central segments: {dupes[:10]}")
     return out
 
 
