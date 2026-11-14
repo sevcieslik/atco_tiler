@@ -20,11 +20,11 @@ from rasterio.transform import from_origin
 from shapely.geometry import box
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "modules"))
-from process_orthos import export_tile, build_gm_rgba_input, make_gm_script
+from process_orthos import export_tile, build_gm_rgb_input, make_gm_script
 
 
 class OrthoMaskTests(unittest.TestCase):
-    def test_rgb_nir_values_and_mask_are_preserved(self):
+    def test_rgb_nir_and_explicit_nodata_255_for_arcgis(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             source = root / "source.tif"
@@ -51,21 +51,44 @@ class OrthoMaskTests(unittest.TestCase):
             )
             self.assertTrue(status.startswith("created"), status)
             with rasterio.open(out) as ds:
-                self.assertIsNone(ds.nodata)
+                self.assertEqual(ds.nodata, 255)
                 self.assertEqual(ds.count, 4)
                 self.assertEqual(ds.colorinterp[3], ColorInterp.undefined)
                 self.assertTrue(ds.dataset_mask()[0,:].max() == 0)
-                np.testing.assert_array_equal(ds.read()[:, 1, 0], rgbn[:,1,0])
+                np.testing.assert_array_equal(ds.read()[:, 1, 0], np.array([254,120,254,240], dtype=np.uint8))
                 self.assertEqual(pixels, 16*15)
-                self.assertIn(MaskFlags.per_dataset, ds.mask_flag_enums[0])
+                self.assertIn(MaskFlags.nodata, ds.mask_flag_enums[0])
             self.assertFalse(Path(str(out)+".msk").exists())
-            rgba = root / "rgba.tif"
-            build_gm_rgba_input(out, rgba)
-            with rasterio.open(rgba) as ds:
-                self.assertEqual(ds.colorinterp[3], ColorInterp.alpha)
-                np.testing.assert_array_equal(ds.read(4)[0,:], np.zeros(16, dtype=np.uint8))
-                self.assertEqual(ds.read(4)[1,0], 255)
-                np.testing.assert_array_equal(ds.read([1,2,3])[:,1,0], rgbn[:3,1,0])
+            rgb = root / "gm_rgb3_white.tif"
+            build_gm_rgb_input(out, rgb)
+            with rasterio.open(rgb) as ds:
+                self.assertEqual(ds.count, 3)
+                self.assertIsNone(ds.nodata)
+                self.assertEqual(ds.colorinterp, (ColorInterp.red, ColorInterp.green, ColorInterp.blue))
+                np.testing.assert_array_equal(ds.read()[:,0,:], np.full((3,16),255,dtype=np.uint8))
+                np.testing.assert_array_equal(ds.read()[:,1,0], np.array([254,120,254], dtype=np.uint8))
+
+    def test_tiff_explicit_nodata_and_white_fill(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp)
+            source = path / "source.tif"
+            pixels = np.full((4,16,16), 90, dtype=np.uint8)
+            pixels[:,0,:] = 254
+            pixels[:,1,2] = [255,155,100,255]
+            with rasterio.open(source, "w", driver="GTiff", width=16,
+                               height=16, count=4, dtype="uint8",
+                               crs="EPSG:3857",transform=from_origin(0,16,1,1)) as ds:
+                ds.write(pixels)
+            output = path / "output.tif"
+            export_tile("TEST",(0,0,16,16),box(0,0,16,16),
+                        [source],output,4,"EPSG:3857",(1,1))
+            with rasterio.open(output) as ds:
+                self.assertEqual(ds.nodata,255)
+                self.assertTrue(np.all(ds.read()[:,0,:] == 255))
+                self.assertTrue(np.all(ds.dataset_mask()[0,:] == 0))
+                np.testing.assert_array_equal(ds.read()[:,1,2],
+                                              [254,155,100,254])
+                self.assertNotIn(MaskFlags.per_dataset, ds.mask_flag_enums[0])
 
     def test_254_background_is_ignored_before_overlapping_mosaic(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -86,7 +109,7 @@ class OrthoMaskTests(unittest.TestCase):
                         out, 4, "EPSG:3857", (1,1))
             with rasterio.open(out) as ds:
                 np.testing.assert_array_equal(ds.read()[:,0,0], second[:,0,0])
-                np.testing.assert_array_equal(ds.read()[:,1,1], first[:,1,1])
+                np.testing.assert_array_equal(ds.read()[:,1,1], np.array([254,200,254,150],dtype=np.uint8))
                 self.assertEqual(ds.dataset_mask()[0,0], 255)
 
     def test_254_background_without_fallback_becomes_transparent(self):
@@ -149,7 +172,7 @@ class OrthoMaskTests(unittest.TestCase):
                         [root/"a.tif",root/"b.tif"],out,4,"EPSG:3857",(1,1))
             with rasterio.open(out) as ds:
                 np.testing.assert_array_equal(ds.read()[:,0,0], b[:,0,0])
-                np.testing.assert_array_equal(ds.read()[:,1,0], a[:,1,0])
+                np.testing.assert_array_equal(ds.read()[:,1,0], np.array([254,120,254,120],dtype=np.uint8))
                 self.assertEqual(ds.dataset_mask()[0,0], 255)
             alone = root / "alone.tif"
             export_tile("ALONE",(0,0,16,16),box(0,0,16,16),
@@ -157,14 +180,37 @@ class OrthoMaskTests(unittest.TestCase):
             with rasterio.open(alone) as ds:
                 self.assertEqual(ds.dataset_mask()[0,0], 0)
 
-    def test_gm_script_keeps_alpha_and_uses_ecw_v3_transparency(self):
+    def test_rgb_intermediate_preserves_valid_near_white_and_no_alpha(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            src = root / "rgbn.tif"
+            pixels = np.full((4,16,16), 110, dtype=np.uint8)
+            pixels[:,0,0] = [254,255,254,255]
+            pixels[:,1,1] = [255,254,255,17]
+            mask = np.full((16,16),255,dtype=np.uint8)
+            mask[0,0] = 0
+            with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+                with rasterio.open(src,"w",driver="GTiff",width=16,height=16,
+                                   count=4,dtype="uint8",crs="EPSG:3857",
+                                   transform=from_origin(0,16,1,1),nodata=None) as ds:
+                    ds.write(pixels)
+                    ds.write_mask(mask)
+            dest = root / "intermediate.tif"
+            build_gm_rgb_input(src,dest)
+            with rasterio.open(dest) as ds:
+                self.assertEqual(ds.count,3)
+                self.assertTrue(np.all(ds.read()[:,0,0]==255))
+                np.testing.assert_array_equal(ds.read()[:,1,1],pixels[:3,1,1])
+                self.assertNotIn(ColorInterp.alpha,ds.colorinterp)
+
+    def test_gm_script_uses_three_band_rgb_white_background(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
             script = root / "run.gms"
-            make_gm_script([(root / "tile.tif", root / "tile_GM_RGBA.tif")],
+            make_gm_script([(root / "tile.tif", root / "tile_GM_RGB3_WHITE.tif")],
                            root, script)
             text = script.read_text(encoding="utf-8")
-            self.assertIn("BG_TRANSPARENT=YES", text)
+            self.assertIn("BG_TRANSPARENT=NO", text)
             self.assertIn("ECW_FORMAT_VERSION=3", text)
             self.assertNotIn("BAND_SETUP=", text)
             self.assertNotIn("USE_BAND4_AS_ALPHA=", text)

@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATCO Retiler v1.06 - Technical Notes</title>
+<title>ATCO Retiler v1.07 - Technical Notes</title>
 <style>
 :root{--nav:#18232d;--ink:#17212b;--muted:#64717c;--line:#d5dde3;--green:#2e9638;--soft:#f5f7f9;--blue:#1769d2;--amber:#996500}
 *{box-sizing:border-box} body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);background:#eef2f5;line-height:1.55}
@@ -15,7 +15,7 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 </style>
 </head>
 <body>
-<header><h1>ATCO Retiler v1.06 - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
+<header><h1>ATCO Retiler v1.07 - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
 <main>
 <div class="card toc"><strong>Contents:</strong> <a href="#sources">Authoritative sources</a><a href="#naming">Naming</a><a href="#tiff">TIFF</a><a href="#ecw">ECW</a><a href="#laz">LAZ</a><a href="#zlas">zLAS</a><a href="#tiles">Tile Index</a><a href="#trajectory">Trajectory attribution</a><a href="#qa">QA outputs</a></div>
 
@@ -33,9 +33,9 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <section class="card" id="naming"><h2>2. Delivery naming</h2>
 <p><strong>MU</strong> meant Management Unit and is no longer used in client-facing filenames. Retiler derives the stable sequence from the approved central BlockNum.</p>
 <table><tr><th>Entity</th><th>Central ID example</th><th>Delivery name example</th></tr>
-<tr><td>TX</td><td><code>9L137_MU_0001</code></td><td><code>9L137_0001</code></td></tr>
-<tr><td>DX</td><td><code>UTIKUMA_OILFIELD_MU_0001</code></td><td><code>UTIKUMA OILFIELD_0001</code></td></tr></table>
-<p>DX client-facing entity names follow the names used in the SoW SQLite, including spaces. The sequential number is unique within the entity; the complete entity + sequence name is unique within the project.</p>
+<tr><td>TX</td><td><code>9L137_MU_0001</code></td><td><code>9L137_2026_Tiles_v1_0001</code></td></tr>
+<tr><td>DX</td><td><code>UTIKUMA_OILFIELD_MU_0001</code></td><td><code>UTIKUMA OILFIELD_2026_Tiles_v1_0001</code></td></tr></table>
+<p>DX client-facing entity names follow the names used in the SoW SQLite, including spaces. The sequential number is unique within the entity; the complete entity + year + Tiles + version + sequence name is unique within the project. Tile Index is named <code>9L137_2026_Tiles_v1.shp</code>.</p>
 <p>AOI revision remains metadata and does not create an extra <code>R01</code> delivery folder.</p>
 </section>
 
@@ -45,19 +45,22 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <li>Retiler creates internal <strong>Ortho Processing Footprints</strong> aligned to the source pixel grid. These are processing footprints, not the client Tile Index.</li>
 <li>Source imagery is mosaicked/cropped to the processing footprint and masked outside the full circuit AOI.</li>
 <li>Final TIFF remains four bands: Red, Green, Blue, NIR. Band 4 is not Alpha.</li>
-<li>ArcGIS-safe background rule: only <code>255,255,255,255</code> is background/NoData. Valid 255 values are preserved as 254 to avoid per-band NoData ambiguity.</li>
+<li>The all-four-band tuples <code>254,254,254,254</code> and <code>255,255,255,255</code> are treated as background during source mosaicking; valid overlapping image pixels can fill such areas.</li><li><strong>ArcGIS Pro compatibility rollback:</strong> the delivered 4-band TIFF carries explicit <code>NoData=255</code> and background pixels are <code>255</code> across all bands. Valid individual source values of 255 are adjusted to 254 to avoid accidental NoData masking by band-level renderers. Band 4 remains NIR, never Alpha.</li>
 <li>Final GeoTIFF is tiled, LZW compressed, 512 × 512 internal blocks.</li></ul>
-<div class="warn"><strong>QA:</strong> inspect at least one edge/overlap location in ArcGIS Pro. Confirm outside-AOI background is transparent/NoData, band 4 remains NIR, and no black/white edge artefacts are visible.</div>
+<div class="warn"><strong>QA:</strong> inspect at least one edge/overlap location in ArcGIS Pro. Confirm outside-AOI background is automatically transparent/NoData in ArcGIS Pro without manually changing symbology, band 4 remains NIR, and no white/black edge artefacts are visible.</div>
+<div class="note"><strong>Source imagery QA:</strong> The Retiler merges overlapping source TIFFs independently for each approved tile. It does not first create a single full-corridor mosaic. If the input TIFFs were already cropped and contain missing image coverage or white fringes, this may limit results. Prefer full-coverage, uncropped source imagery where available; compare tile 0008/0009 against a full source mosaic before interpreting edge artefacts as a clipping defect.</div>
 </section>
 
 <section class="card" id="ecw"><h2>4. ECW generation</h2>
-<p><strong>Purpose:</strong> 3-band visual RGB ECW for PLS / visual use.</p>
-<ul><li>Generated from the final TIFF, not directly from source imagery.</li>
-<li>A temporary Global Mapper input is written under <code>QA\Imagery\gm_rgb_input</code>.</li>
-<li>The temporary file contains RGB plus an Alpha band derived from the TIFF validity mask. NIR is deliberately excluded from this temporary fourth band.</li>
-<li>Global Mapper imports bands 1,2,3 with no contrast enhancement and uses band 4 only as Alpha.</li>
-<li>ECW format v3, target compression 10:1.</li></ul>
-<div class="warn"><strong>QA:</strong> compare ECW against the corresponding TIFF and inspect tile boundaries in PLS. The ECW is a visual RGB product and is not expected to retain NIR.</div>
+<p><strong>Purpose:</strong> RGB-only visual ECW for PLS-CADD and GIS display. This is not the 4-band RGBI TIFF deliverable.</p>
+<ul><li>Generated from the final TIFF, using only its Red, Green and Blue bands. NIR is excluded.</li>
+<li>Global Mapper source intermediates are written to <code>QA\Imagery\gm_rgb_input</code> with a new <code>_GM_RGB3_WHITE.tif</code> suffix. Older RGBA intermediates must not be reused.</li>
+<li>Each intermediate contains <strong>exactly 3 bands (RGB)</strong>, with no Alpha and no scalar NoData.</li>
+<li>Pixels outside the delivered TIFF NoData mask are explicitly set to white <code>(255,255,255)</code>. In-range valid RGB values are preserved.</li>
+<li>Global Mapper receives the 3-band input without contrast enhancement and exports ECW v3, target compression 10:1, with <code>BG_TRANSPARENT=NO</code>.</li>
+<li><strong>Compatibility decision:</strong> the 3-band ECW does not encode transparency. A white outside-footprint background is expected. Compression may create faint edge fringes; no magenta RGB fill or fourth Alpha band should be present.</li>
+<li>Following any ECW export-configuration change, select <strong>Run Build</strong> and confirm overwrite of existing ECWs. <strong>Rerun Missing</strong> does not replace already-present previous-version ECWs.</li></ul>
+<div class="warn"><strong>Release QA gate:</strong> build a fresh test ECW (e.g. tile 0008), verify 3-band interpretation and white/no-magenta background in Global Mapper, MicroStation Raster Manager, TerraScan and PLS-CADD. Verify alignment and investigate edge halos. Do not mark compatible before PLS acceptance. TIFF keeps its internal mask and is not altered by this change.</div>
 </section>
 
 <section class="card" id="laz"><h2>5. LAZ generation</h2>
@@ -82,14 +85,14 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 </section>
 
 <section class="card" id="tiles"><h2>7. Tile Index</h2>
-<p>Retiler creates an <strong>intermediate shapefile</strong> under <code>Tile_Index</code>. It is not the final project GDB. During final delivery assembly this SHP is imported as the <code>TILES</code> feature class together with the other GDB products.</p>
+<p>Retiler creates an <strong>intermediate shapefile</strong> named using the circuit, year and version (for example <code>9L137_2026_Tiles_v1.shp</code>) under <code>Tile_Index</code>. It is not the final project GDB. During final delivery assembly this SHP is imported as the <code>TILES</code> feature class together with the other GDB products.</p>
 <h3>TX SHP fields</h3>
 <table><tr><th>Field</th><th>Meaning / source</th></tr>
 <tr><td>BlockNum</td><td>Stable sequential tile ID derived from the approved central segment.</td></tr>
 <tr><td>ZONE</td><td>UTM zone derived from the entity CRS.</td></tr>
 <tr><td>YEAR</td><td>2026.</td></tr>
 <tr><td>LINE</td><td>TX circuit code, e.g. 9L137.</td></tr>
-<tr><td>NAME</td><td>Client-facing tile name, e.g. 9L137_0001.</td></tr>
+<tr><td>NAME</td><td>Client-facing tile name, e.g. 9L137_2026_Tiles_v1_0001.</td></tr>
 <tr><td>fldate</td><td>Acquisition date(s) matched from the trajectory/SBET index using final LAZ GPS time.</td></tr>
 <tr><td>Flightline</td><td>Flightline code(s) matched from the trajectory/SBET index.</td></tr></table>
 <h3>DX SHP fields</h3>
@@ -109,12 +112,12 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 
 <section class="card" id="qa"><h2>9. QA outputs and reruns</h2>
 <table><tr><th>QA area</th><th>Typical outputs</th></tr>
-<tr><td>QA\Imagery</td><td>Processing footprint overlap report, Global Mapper scripts/logs, RGB(A) intermediates and imagery processing report.</td></tr>
+<tr><td>QA\Imagery</td><td>Processing footprint overlap report, Global Mapper scripts/logs, 3-band RGB-white intermediates and imagery processing report.</td></tr>
 <tr><td>QA\LiDAR</td><td>Source inventory, processing report, Return 0 / Synthetic-by-class report and execution metadata.</td></tr>
 <tr><td>QA\LiDAR\EzLAS</td><td>EzLAS conversion/verification logs, command records and validation CSV.</td></tr>
 <tr><td>QA\TILES</td><td>Tile Index attribute export and schema JSON.</td></tr></table>
 <p><strong>Run Build</strong> overwrites selected existing products after confirmation. <strong>Rerun Missing</strong> fills only missing/invalid products where possible. QA should be reviewed before assuming a rerun is required.</p>
 </section>
 
-<p class="small">ATCO Retiler v1.06 · Bugs, improvements and issues: pit@nmgroup.com</p>
+<p class="small">ATCO Retiler v1.07 · Bugs, improvements and issues: pit@nmgroup.com</p>
 </main></body></html>
