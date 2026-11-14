@@ -1229,14 +1229,19 @@ class RetilerApp(tk.Tk):
 
         mode = self.process_mode.get()
         records = list(self.entity_records)
-        th = threading.Thread(target=self._build_worker, args=(rerun,selected,gm,mode,records), daemon=True)
+        input_sources = dict(self.mapped)
+        output_root = Path(self.output_root)
+        workers = int(self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2)))
+        th = threading.Thread(
+            target=self._build_worker,
+            args=(rerun, selected, gm, mode, records, input_sources, output_root, workers),
+            daemon=True)
         th.start()
 
-    def _build_worker(self, rerun, selected, gm, mode, records):
+    def _build_worker(self, rerun, selected, gm, mode, records, input_sources, output_root, workers):
         try:
             env = os.environ.copy()
-            env["ATCO_PARALLEL_WORKERS"] = str(int(
-                self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2))))
+            env["ATCO_PARALLEL_WORKERS"] = str(workers)
             overwrite = [] if rerun else ["--overwrite"]
             for idx, record in enumerate(records, 1):
                 if self.stop_requested:
@@ -1248,12 +1253,12 @@ class RetilerApp(tk.Tk):
                     products = [p for p in selected if p != "Tile Index"]
                     args = [
                         sys.executable, str(MODULES / "process_aoi_converter.py"),
-                        "--aoi", aoi, "--output-root", str(self.output_root), *overwrite,
+                        "--aoi", aoi, "--output-root", str(output_root), *overwrite,
                     ]
                     if any(p in products for p in ("TIFF", "ECW")):
-                        args += ["--ortho-source", str(self.mapped["orthos"])]
+                        args += ["--ortho-source", str(input_sources["orthos"])]
                     if any(p in products for p in ("LAZ", "zLAS")):
-                        args += ["--cloud-source", str(self.mapped["point_cloud"])]
+                        args += ["--cloud-source", str(input_sources["point_cloud"])]
                     for product in products:
                         args.append("--" + product.lower())
                     if "ECW" in products:
@@ -1267,8 +1272,8 @@ class RetilerApp(tk.Tk):
                 if any(p in selected for p in ("TIFF", "ECW")):
                     args = [
                         sys.executable, str(MODULES / "process_orthos.py"),
-                        "--aoi", aoi, "--source", str(self.mapped["orthos"]),
-                        "--output-root", str(self.output_root), *overwrite,
+                        "--aoi", aoi, "--source", str(input_sources["orthos"]),
+                        "--output-root", str(output_root), *overwrite,
                     ]
                     if "ECW" in selected:
                         args += ["--global-mapper-exe", str(gm)]
@@ -1282,10 +1287,10 @@ class RetilerApp(tk.Tk):
                 if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")):
                     args = [
                         sys.executable, str(MODULES / "process_lidar.py"),
-                        "--aoi", aoi, "--output-root", str(self.output_root), *overwrite,
+                        "--aoi", aoi, "--output-root", str(output_root), *overwrite,
                     ]
                     if any(p in selected for p in ("LAZ", "zLAS")):
-                        args += ["--source", str(self.mapped["point_cloud"])]
+                        args += ["--source", str(input_sources["point_cloud"])]
                     if "zLAS" in selected:
                         args += ["--zlas", "--ezlas-exe", str(EZLAS)]
                     if "Tile Index" in selected:
