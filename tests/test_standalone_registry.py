@@ -44,7 +44,7 @@ class RegistryImportTests(unittest.TestCase):
         found = get_standalone_records(self.db)
         self.assertEqual(len(found),1)
         self.assertEqual(found[0]["kind"],"substation")
-        self.assertEqual(found[0]["entity"],"BATTLE_RIVER")
+        self.assertEqual(found[0]["entity"],"BATTLE_RIVER_Substation")
         self.assertEqual(found[0]["revision"],"v1")
         validate_standalone(found[0])
         with sqlite3.connect(self.db) as con:
