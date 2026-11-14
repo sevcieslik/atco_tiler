@@ -359,9 +359,30 @@ class RetilerApp(tk.Tk):
         self.resource_label = tk.Label(self.statusbar, text="", fg="#d5dde3", bg=NAV_2, font=("Segoe UI", 9))
         self.resource_label.pack(side="right", padx=16)
 
+        tk.Label(self.sidebar, text="PROCESSING MODE", bg=NAV, fg=MUTED,
+                 anchor="w", font=("Segoe UI", 9, "bold")).pack(
+            fill="x", padx=16, pady=(13, 6))
+        self.mode_buttons = []
+        for value, label in (
+            ("standard", "TX / DX  Segments"),
+            ("converter", "Telecom / Substation"),
+        ):
+            button = tk.Radiobutton(
+                self.sidebar, text=label, value=value, variable=self.process_mode,
+                command=self._mode_changed, indicatoron=False,
+                bg=ROW_BG, fg=TEXT, selectcolor=GREEN_DARK,
+                activebackground=GREEN_DARK, activeforeground="white",
+                font=("Segoe UI", 10, "bold"), anchor="w",
+                relief="flat", bd=0, highlightthickness=0, padx=13, pady=10)
+            button.pack(fill="x", padx=11, pady=2)
+            self.mode_buttons.append(button)
+        tk.Frame(self.sidebar, bg=BORDER, height=1).pack(
+            fill="x", padx=14, pady=(12, 6))
+
         self.nav_buttons = {}
         items = [
             ("Build", "▶"),
+            ("Activity Log", "▤"),
             ("Data Sources", "▧"),
             ("Settings", "⚙"),
             ("QA & Reports", "▥"),
@@ -399,6 +420,7 @@ class RetilerApp(tk.Tk):
 
         self.pages = {}
         self.pages["Build"] = self._build_build_page()
+        self.pages["Activity Log"] = self._build_log_page()
         self.pages["Data Sources"] = self._build_mapping_page()
         self.pages["Settings"] = self._build_settings_page()
         self.pages["QA & Reports"] = self._build_qa_page()
@@ -559,21 +581,6 @@ class RetilerApp(tk.Tk):
         # v1.08: explicit mode and multi-AOI selection.
         mode_outer, mode_body = self.card(page, "Processing Mode & Entities")
         mode_outer.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
-        mode_row = tk.Frame(mode_body, bg=CARD)
-        mode_row.pack(fill="x", padx=16, pady=(0, 6))
-        self.mode_buttons = []
-        for value, label in (
-            ("standard", "Standard Retiler (TX / DX, central segments)"),
-            ("converter", "AOI Converter (Telecoms / Substations, no segments)"),
-        ):
-            radio = tk.Radiobutton(
-                mode_row, text=label, value=value, variable=self.process_mode,
-                command=self._mode_changed, bg=CARD, fg=TEXT,
-                selectcolor=NAV_2, activebackground=CARD, activeforeground=TEXT,
-                font=("Segoe UI", 10),
-            )
-            radio.pack(side="left", padx=(0, 25))
-            self.mode_buttons.append(radio)
         row = tk.Frame(mode_body, bg=CARD)
         row.pack(fill="x", padx=16, pady=(0, 12))
         self._dashboard_label(row, "Entities to process (Ctrl/Shift for multiple):",
