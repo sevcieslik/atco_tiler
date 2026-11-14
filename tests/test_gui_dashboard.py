@@ -43,7 +43,7 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertEqual(set(self.app.product_checks), {"TIFF", "ECW", "LAZ", "zLAS", "Tile Index"})
         self.assertEqual(len(self.app.exec_rows), 5)
         self.assertTrue(hasattr(self.app, "aoi_list"))
-        self.assertEqual(self.app.process_mode.get(), "standard")
+        self.assertFalse(hasattr(self.app, "process_mode"))
         self.assertEqual(len(self.app.selected_products()), 5)
         self.assertIn("Build", self.app.pages)
         self.assertIn("Data Sources", self.app.pages)
