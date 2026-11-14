@@ -240,7 +240,6 @@ class RetilerApp(tk.Tk):
         self.cloud_blocks = []
         self.entity_records = []
         self.aoi_options = []
-        self.process_mode = tk.StringVar(value=self.cfg.get("processing_mode", "standard"))
         self.running = False
         self.paused = False
         self.process = None
@@ -358,31 +357,6 @@ class RetilerApp(tk.Tk):
 
         self.resource_label = tk.Label(self.statusbar, text="", fg="#d5dde3", bg=NAV_2, font=("Segoe UI", 9))
         self.resource_label.pack(side="right", padx=16)
-
-        tk.Label(self.sidebar, text="PROCESSING MODE", bg=NAV, fg=MUTED,
-                 anchor="w", font=("Segoe UI", 9, "bold")).pack(
-            fill="x", padx=16, pady=(13, 6))
-        # One joined left/right switch, not two stacked navigation boxes.
-        switch = tk.Frame(self.sidebar, bg=BORDER, bd=1)
-        switch.pack(fill="x", padx=11, pady=(0, 9))
-        switch.grid_columnconfigure(0, weight=1, uniform="mode")
-        switch.grid_columnconfigure(1, weight=1, uniform="mode")
-        self.mode_buttons = []
-        for column, (value, label) in enumerate((
-            ("standard", "TX / DX"),
-            ("converter", "Telecom"),
-        )):
-            button = tk.Radiobutton(
-                switch, text=label, value=value, variable=self.process_mode,
-                command=self._mode_changed, indicatoron=False,
-                bg=ROW_BG, fg=TEXT, selectcolor=GREEN_DARK,
-                activebackground=GREEN_DARK, activeforeground="white",
-                font=("Segoe UI", 10, "bold"), anchor="center",
-                relief="flat", bd=0, highlightthickness=0, padx=3, pady=10)
-            button.grid(row=0, column=column, sticky="ew")
-            self.mode_buttons.append(button)
-        tk.Frame(self.sidebar, bg=BORDER, height=1).pack(
-            fill="x", padx=14, pady=(3, 6))
 
         self.nav_buttons = {}
         items = [
@@ -785,7 +759,7 @@ class RetilerApp(tk.Tk):
         if self.running:
             return
         for name, value in self.product_vars.items():
-            value.set(bool(selected) and not (self.process_mode.get() == "converter" and name == "Tile Index"))
+            value.set(bool(selected) and (name != "Tile Index" or self.has_segmented_entities()))
         self._sync_product_selection()
 
     def _sync_product_selection(self):
@@ -959,18 +933,6 @@ class RetilerApp(tk.Tk):
         if p:
             self.gm_var.set(p)
 
-    def _mode_changed(self):
-        self.cfg["processing_mode"] = self.process_mode.get()
-        core.save_config(self.cfg)
-        is_converter = self.process_mode.get() == "converter"
-        if is_converter:
-            self.product_vars["Tile Index"].set(False)
-        if hasattr(self, "product_checks"):
-            self.product_checks["Tile Index"].configure(
-                state="disabled" if is_converter else "normal")
-        self._sync_product_selection()
-        self.refresh_mapping()
-
     def _select_all_aois(self):
         self.aoi_list.selection_set(0, "end")
         self._update_aoi_context()
@@ -986,38 +948,41 @@ class RetilerApp(tk.Tk):
         self.entity_records = []
         selected = self.selected_aois()
         if not selected:
-            self.context_label.configure(text="Select one or more AOIs")
+            self.context_label.configure(text="Select one or more registered entities")
         else:
             try:
                 sys.path.insert(0, str(MODULES))
                 import process_orthos as po
+                from central_aoi_catalogue import validate_standalone
                 from atco_delivery import YEAR, TILE_VERSION
-                mode = self.process_mode.get()
-                for shp in selected:
-                    entity = po.circuit_from_polygon(shp) if shp.stem.lower().endswith("_polygon") else shp.stem
-                    if mode == "standard":
+                for item in selected:
+                    entity = item["entity"]
+                    shp = item["path"]
+                    if item["has_segments"]:
                         rec = po.load_aoi_revision(entity, shp)
                         _, seg = po.load_segments(entity, rec["revision_code"])
                         imagery = [str(v) for v in seg["ImageryName"]]
                         cloud = [str(v) for v in seg["PointCloudName"]]
                         revision = rec["revision_code"]
                     else:
-                        from process_aoi_converter import read_aoi
-                        read_aoi(shp)
+                        validate_standalone(item)
                         imagery = [f"{entity}_{YEAR}_{TILE_VERSION}"]
                         cloud = imagery[:]
-                        revision = "Standalone"
-                    self.entity_records.append({
+                        revision = item["revision"]
+                    record = {
                         "path": shp, "entity": entity, "revision": revision,
                         "imagery": imagery, "cloud": cloud,
-                    })
+                        "has_segments": item["has_segments"], "kind": item["kind"],
+                    }
+                    self.entity_records.append(record)
                     self.blocks.extend(imagery)
                     self.cloud_blocks.extend(cloud)
                 first = self.entity_records[0]
                 self.context = (first["entity"], first["revision"])
                 self.context_label.configure(
-                    text=f"{len(self.entity_records)} entity(s) selected | "
-                         + ", ".join(r["entity"] for r in self.entity_records[:5]))
+                    text=f"{len(self.entity_records)} registered entity(s) | "
+                         + ", ".join(f"{r['entity']} ({r['kind']})"
+                                     for r in self.entity_records[:5]))
             except Exception as exc:
                 self.context_label.configure(text="AOI validation error")
                 self.log(f"AOI preflight: {exc}", "WARN")
@@ -1025,11 +990,19 @@ class RetilerApp(tk.Tk):
                 self.blocks = []
                 self.cloud_blocks = []
                 self.entity_records = []
+        if hasattr(self, "product_checks"):
+            allow_index = bool(self.has_segmented_entities())
+            self.product_checks["Tile Index"].configure(
+                state="normal" if allow_index else "disabled")
+            if not allow_index:
+                self.product_vars["Tile Index"].set(False)
+            self._sync_product_selection()
         if hasattr(self, "summary_values"):
             self.summary_values["project"].configure(
                 text=f"{len(self.entity_records)} entities" if self.entity_records else "Awaiting input")
             self.summary_values["segments"].configure(
-                text=str(len(self.blocks)) if self.blocks else "—")
+                text=str(sum(len(x["imagery"]) for x in self.entity_records
+                             if x["has_segments"])) if self.entity_records else "—")
         self.refresh_product_status()
 
     def refresh_mapping(self):
@@ -1058,23 +1031,33 @@ class RetilerApp(tk.Tk):
             tk.Label(row,text=label,width=16,anchor="w",bg=CARD,fg=TEXT,font=("Segoe UI",10,"bold")).pack(side="left",padx=10)
             tk.Label(row,text=str(p or "Not mapped"),anchor="w",bg=CARD,fg=MUTED,font=("Segoe UI",9)).pack(side="left",fill="x",expand=True)
 
-        # Preserve chosen entities during refresh; select all on first discovery.
-        previous = {str(p) for p in self.selected_aois()} if self.aoi_options else set()
+        # Show circuit polygons from Input/AOI plus registered Telecom/Substations
+        # from the same central SQLite database, with no operator mode switch.
+        previous = {str(item["path"]) for item in self.selected_aois()} if self.aoi_options else set()
         self.aoi_options = []
         self.aoi_list.delete(0, "end")
         try:
+            from central_aoi_catalogue import get_standalone_records
+            from aoi_batch import discover_aois
+            import process_orthos as po
             if self.mapped.get("aoi"):
-                sys.path.insert(0, str(MODULES))
-                from aoi_batch import discover_aois
-                self.aoi_options = discover_aois(
-                    self.mapped["aoi"], converter=self.process_mode.get() == "converter")
-                for p in self.aoi_options:
-                    self.aoi_list.insert("end", str(p.stem) + "    |    " + str(p.parent))
-                chosen = [i for i, p in enumerate(self.aoi_options) if str(p) in previous]
-                for idx in (chosen if chosen else range(len(self.aoi_options))):
-                    self.aoi_list.selection_set(idx)
-        except Exception as exc:
+                for shp in discover_aois(self.mapped["aoi"], converter=False):
+                    self.aoi_options.append({
+                        "kind": "circuit", "entity": po.circuit_from_polygon(shp),
+                        "path": shp, "has_segments": True,
+                    })
+            self.aoi_options += get_standalone_records()
+            for item in self.aoi_options:
+                label = f"{item['entity']}  [{item['kind']}]"
+                self.aoi_list.insert("end", label + "    |    " + str(item["path"]))
+            chosen = [i for i, item in enumerate(self.aoi_options)
+                      if str(item["path"]) in previous]
+            for idx in (chosen if chosen else range(len(self.aoi_options))):
+                self.aoi_list.selection_set(idx)
+        except FileNotFoundError as exc:
             self.log(f"AOI discovery: {exc}", "WARN")
+        except Exception as exc:
+            self.log(f"Central AOI catalogue: {exc}", "WARN")
         self._update_aoi_context()
 
         self._count_source_files()
@@ -1088,9 +1071,13 @@ class RetilerApp(tk.Tk):
                 text=str(len(self.blocks)) if self.blocks else "—")
         self.refresh_product_status()
 
+    def has_segmented_entities(self):
+        return any(r.get("has_segments") for r in self.entity_records)
+
     def selected_products(self):
-        return [k for k,v in self.product_vars.items() if v.get() and
-                not (self.process_mode.get() == "converter" and k == "Tile Index")]
+        return [k for k, v in self.product_vars.items() if v.get() and
+                (k != "Tile Index" or self.has_segmented_entities()
+                 or not self.entity_records)]
 
     def product_paths(self):
         if not self.context:
@@ -1108,7 +1095,6 @@ class RetilerApp(tk.Tk):
         if not self.entity_records:
             return {}
         counts = {key: [0, 0] for key in ("TIFF", "ECW", "LAZ", "zLAS", "Tile Index")}
-        converter = self.process_mode.get() == "converter"
         for record in self.entity_records:
             entity = record["entity"]
             base = core.output_base(self.output_root, entity)
@@ -1120,10 +1106,10 @@ class RetilerApp(tk.Tk):
             ):
                 names = record["cloud"] if product in ("LAZ", "zLAS") else record["imagery"]
                 counts[product][0] += len(names)
-                target_folder = product_folder(product, converter=converter)
+                target_folder = product_folder(product, converter=not record["has_segments"])
                 counts[product][1] += sum(
                     1 for name in names if self._is_valid_file(base / target_folder / f"{name}{ext}"))
-            if not converter:
+            if record["has_segments"]:
                 shp = core.tile_index_shp_path(base, entity)
                 counts["Tile Index"][0] += 1
                 if (self._is_valid_file(shp) and shp.with_suffix(".dbf").is_file()
