@@ -6,7 +6,7 @@ TOOL_ROOT = Path(__file__).resolve().parent
 PACKAGE_ROOT = TOOL_ROOT.parent
 MODULES = TOOL_ROOT / 'modules'
 sys.path.insert(0, str(MODULES))
-from atco_delivery import enrich_segments, output_base, tile_index_shp_path
+from atco_delivery import enrich_segments, output_base, product_folder, tile_index_shp_path
 CONFIG_DIR = TOOL_ROOT / 'config'
 CONFIG_PATH = CONFIG_DIR / 'atco_processor_config.json'
 CENTRAL_ROOT = Path(r'W:\APPS\PIT\ATCO')
@@ -240,7 +240,7 @@ def migrate_legacy_qa(base: Path):
 
     # EzLAS writes EzLasLog (n).txt beside zLAS files on some builds.
     # The client delivery folder must contain only .zlas products.
-    zlas_dir = base / 'zLAS'
+    zlas_dir = base / product_folder('zLAS')
     if zlas_dir.exists():
         for item in list(zlas_dir.iterdir()):
             if item.is_file() and item.suffix.casefold() != '.zlas':
@@ -292,10 +292,10 @@ def product_status(input_root,mapped):
             return False
 
     missing = {
-        'TIFF': [b for b in blocks if not ok(base/'TIFF'/f'{b}.tif')],
-        'ECW': [b for b in blocks if not ok(base/'ECW'/f'{b}.ecw')],
-        'LAZ': [b for b in cloud_blocks if not ok(base/'LAZ'/f'{b}.laz')],
-        'zLAS': [b for b in cloud_blocks if not ok(base/'zLAS'/f'{b}.zlas')],
+        'TIFF': [b for b in blocks if not ok(base/product_folder('TIFF')/f'{b}.tif')],
+        'ECW': [b for b in blocks if not ok(base/product_folder('ECW')/f'{b}.ecw')],
+        'LAZ': [b for b in cloud_blocks if not ok(base/product_folder('LAZ')/f'{b}.laz')],
+        'zLAS': [b for b in cloud_blocks if not ok(base/product_folder('zLAS')/f'{b}.zlas')],
     }
     tile_shp = tile_index_shp_path(base, circuit)
     shp_ok = ok(tile_shp) and tile_shp.with_suffix('.dbf').is_file() and tile_shp.with_suffix('.shx').is_file()
