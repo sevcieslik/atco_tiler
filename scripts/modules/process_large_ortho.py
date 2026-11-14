@@ -105,12 +105,17 @@ def export_streamed_rgb_i(name, bounds, geom, files, out_tif: Path, crs, res,
                         chunk_bounds = window_bounds(window, transform)
                         chunk_footprint = box(*chunk_bounds)
                         completed_chunks += 1
+                        white = np.full(
+                            (4, int(window.height), int(window.width)),
+                            255, dtype=np.uint8)
                         if not geom.intersects(chunk_footprint):
+                            dst.write(white, window=window)
                             continue
                         matching = [ds for ds in datasets
                                     if box(ds.bounds.left, ds.bounds.bottom,
                                            ds.bounds.right, ds.bounds.top).intersects(chunk_footprint)]
                         if not matching:
+                            dst.write(white, window=window)
                             continue
                         array, affine = merge(
                             matching, bounds=chunk_bounds, res=(rx, ry),
@@ -127,6 +132,7 @@ def export_streamed_rgb_i(name, bounds, geom, files, out_tif: Path, crs, res,
                                                transform=affine, invert=True)
                         valid = inside & (array[4] == 1)
                         if not valid.any():
+                            dst.write(white, window=window)
                             continue
                         pixels = array[:4].copy()
                         pixels[(pixels == 255) & valid[None, :, :]] = 254
@@ -146,7 +152,7 @@ def export_streamed_rgb_i(name, bounds, geom, files, out_tif: Path, crs, res,
         tmp.replace(out_tif)
         completed = True
         out_tif.with_suffix(".prj").write_text(
-            rasterio.crs.CRS.from_user_input(crs).to_wkt("WKT1_ESRI"),
+            rasterio.crs.CRS.from_user_input(crs).to_wkt(version="WKT1_ESRI"),
             encoding="utf-8",
         )
         return "created (streamed)", written, (100 * written / pixel_count)
