@@ -1002,26 +1002,24 @@ class RetilerApp(tk.Tk):
             tk.Label(row,text=label,width=16,anchor="w",bg=CARD,fg=TEXT,font=("Segoe UI",10,"bold")).pack(side="left",padx=10)
             tk.Label(row,text=str(p or "Not mapped"),anchor="w",bg=CARD,fg=MUTED,font=("Segoe UI",9)).pack(side="left",fill="x",expand=True)
 
-        self.context = None
-        self.blocks = []
-        self.cloud_blocks = []
+        # Preserve chosen entities during refresh; select all on first discovery.
+        previous = {str(p) for p in self.selected_aois()} if self.aoi_options else set()
+        self.aoi_options = []
+        self.aoi_list.delete(0, "end")
         try:
             if self.mapped.get("aoi"):
-                sys.path.insert(0,str(MODULES))
-                import process_orthos as po
-                shp = po.find_polygon_shp(self.mapped["aoi"])
-                circuit = po.circuit_from_polygon(shp)
-                rec = po.load_aoi_revision(circuit, shp)
-                _, seg = po.load_segments(circuit, rec["revision_code"])
-                self.blocks = [str(v) for v in seg["ImageryName"].tolist()]
-                self.cloud_blocks = [str(v) for v in seg["PointCloudName"].tolist()]
-                self.context = (circuit, rec["revision_code"])
-                self.context_label.configure(text=f"{circuit} / {rec['revision_code']}")
-            else:
-                self.context_label.configure(text="Not detected")
+                sys.path.insert(0, str(MODULES))
+                from aoi_batch import discover_aois
+                self.aoi_options = discover_aois(
+                    self.mapped["aoi"], converter=self.process_mode.get() == "converter")
+                for p in self.aoi_options:
+                    self.aoi_list.insert("end", str(p.stem) + "    |    " + str(p.parent))
+                chosen = [i for i, p in enumerate(self.aoi_options) if str(p) in previous]
+                for idx in (chosen if chosen else range(len(self.aoi_options))):
+                    self.aoi_list.selection_set(idx)
         except Exception as exc:
-            self.context_label.configure(text="Mapping error")
-            self.log(f"Context detection: {exc}", "WARN")
+            self.log(f"AOI discovery: {exc}", "WARN")
+        self._update_aoi_context()
 
         self._count_source_files()
         if hasattr(self, "summary_values"):
@@ -1049,24 +1047,30 @@ class RetilerApp(tk.Tk):
             return False
 
     def status_snapshot(self):
-        if not self.context or not self.blocks:
+        if not self.entity_records:
             return {}
-        circuit, rev = self.context
-        base = core.output_base(self.output_root, circuit)
-        data = {}
-        for prod,folder,ext in (
-            ("TIFF","TIFF",".tif"),
-            ("ECW","ECW",".ecw"),
-            ("LAZ","LAZ",".laz"),
-            ("zLAS","zLAS",".zlas"),
-        ):
-            names = self.cloud_blocks if prod in ("LAZ", "zLAS") else self.blocks
-            present = sum(1 for b in names if self._is_valid_file(base/folder/f"{b}{ext}"))
-            data[prod] = (len(names), present)
-        tile_shp = core.tile_index_shp_path(base, circuit)
-        shp_ok = self._is_valid_file(tile_shp) and tile_shp.with_suffix('.dbf').is_file() and tile_shp.with_suffix('.shx').is_file()
-        data["Tile Index"] = (1, 1 if shp_ok else 0)
-        return data
+        counts = {key: [0, 0] for key in ("TIFF", "ECW", "LAZ", "zLAS", "Tile Index")}
+        converter = self.process_mode.get() == "converter"
+        for record in self.entity_records:
+            entity = record["entity"]
+            base = core.output_base(self.output_root, entity)
+            for product, folder, ext in (
+                ("TIFF", "TIFF", ".tif"),
+                ("ECW", "ECW", ".ecw"),
+                ("LAZ", "LAZ", ".laz"),
+                ("zLAS", "zLAS", ".zlas"),
+            ):
+                names = record["cloud"] if product in ("LAZ", "zLAS") else record["imagery"]
+                counts[product][0] += len(names)
+                counts[product][1] += sum(
+                    1 for name in names if self._is_valid_file(base / folder / f"{name}{ext}"))
+            if not converter:
+                shp = core.tile_index_shp_path(base, entity)
+                counts["Tile Index"][0] += 1
+                if (self._is_valid_file(shp) and shp.with_suffix(".dbf").is_file()
+                        and shp.with_suffix(".shx").is_file()):
+                    counts["Tile Index"][1] += 1
+        return {key: tuple(value) for key, value in counts.items()}
 
     def refresh_product_status(self):
         snap = self.status_snapshot()
