@@ -240,6 +240,7 @@ class RetilerApp(tk.Tk):
         self.cloud_blocks = []
         self.entity_records = []
         self.aoi_options = []
+        self._aoi_selection_initialized = False
         self.running = False
         self.paused = False
         self.process = None
@@ -913,6 +914,7 @@ class RetilerApp(tk.Tk):
         if not p:
             return
         self.input_root = Path(p)
+        self._aoi_selection_initialized = False
         self.output_root = core.default_output_root(self.input_root)
         self.save_cfg()
         self.refresh_mapping()
@@ -1059,8 +1061,16 @@ class RetilerApp(tk.Tk):
                 self.aoi_list.insert("end", label + "    |    " + str(item["path"]))
             chosen = [i for i, item in enumerate(self.aoi_options)
                       if str(item["path"]) in previous]
-            for idx in (chosen if chosen else range(len(self.aoi_options))):
+            if not self._aoi_selection_initialized and not chosen:
+                # Never auto-select every registered substation and telecom.
+                # Choose at most the first local circuit; the operator opts in
+                # to extra entities explicitly.
+                first_local = next((i for i, item in enumerate(self.aoi_options)
+                                    if item["has_segments"]), None)
+                chosen = [first_local] if first_local is not None else []
+            for idx in chosen:
                 self.aoi_list.selection_set(idx)
+            self._aoi_selection_initialized = True
         except FileNotFoundError as exc:
             self.log(f"AOI discovery: {exc}", "WARN")
         except Exception as exc:
