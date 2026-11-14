@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "modules"))
 from atco_delivery import (client_entity_name, delivery_imagery_name,
-                           delivery_point_cloud_name, tile_index_shp_path,
+                           delivery_point_cloud_name, product_folder, tile_index_shp_path,
                            tile_sequence)
 
 class DeliveryNamingTests(unittest.TestCase):
@@ -22,6 +22,13 @@ class DeliveryNamingTests(unittest.TestCase):
     def test_product_stems_are_separate(self):
         self.assertNotEqual(delivery_imagery_name("9L137", "9L137_MU_0008"),
                             delivery_point_cloud_name("9L137", "9L137_MU_0008"))
+
+    def test_product_folders_are_mode_isolated(self):
+        for product in ("TIFF", "ECW", "LAZ", "zLAS"):
+            self.assertEqual(product_folder(product), f"{product}_segments")
+            self.assertEqual(product_folder(product, converter=True), f"{product}_area")
+            self.assertNotEqual(product_folder(product),
+                                product_folder(product, converter=True))
 
     def test_index_filename(self):
         self.assertEqual(tile_index_shp_path(Path("output/9L137"), "9L137").name,
