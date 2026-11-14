@@ -7,6 +7,7 @@ are blocked before allocating a full raster until blockwise export is added.
 from __future__ import annotations
 import argparse
 import json
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,6 +60,7 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
     if entity_name:
         entity = str(entity_name)
     if revision:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
         from central_aoi_catalogue import get_standalone_records, validate_standalone
         matches = [r for r in get_standalone_records()
                    if r["entity"] == entity and r["revision"] == revision]
