@@ -27,7 +27,7 @@ from shapely import wkb
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-from atco_delivery import enrich_segments, output_base
+from atco_delivery import enrich_segments, output_base, product_folder
 
 CENTRAL_ROOT = Path(r"W:\APPS\PIT\ATCO")
 DB_PATH = CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite"
@@ -852,8 +852,8 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
     print(f'Raster grid: {res[0]:g} x {res[1]:g} m; data bands: {band_count}', flush=True)
 
     base = output_base(Path(output_root), circuit)
-    tif_dir = base/'TIFF'
-    ecw_dir = base/'ECW'
+    tif_dir = base / product_folder('TIFF')
+    ecw_dir = base / product_folder('ECW')
     qa_root = base/'QA'
     qa_dir = qa_root/'Imagery'
     index_dir = qa_root/'Ortho_Processing_Footprints'
