@@ -66,7 +66,7 @@ class DashboardSmokeTests(unittest.TestCase):
         self.app.product_vars["ECW"].set(True)
         self.app._enforce_product_dependencies("ECW")
         self.assertTrue(self.app.product_vars["TIFF"].get())
-        self.assertEqual(str(self.app.run_btn["state"]), "normal")
+        self.assertEqual(str(self.app.run_btn["state"]), "disabled")
         self.app.product_vars["TIFF"].set(False)
         self.app._enforce_product_dependencies("TIFF")
         self.assertFalse(self.app.product_vars["ECW"].get())
