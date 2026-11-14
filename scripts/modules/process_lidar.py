@@ -24,7 +24,7 @@ from shapely.ops import unary_union
 
 from atco_delivery import (
     YEAR as DELIVERY_YEAR, client_entity_name,
-    enrich_segments, entity_type, is_tx, output_base, tile_index_shp_path, utm_zone,
+    enrich_segments, entity_type, is_tx, output_base, product_folder, tile_index_shp_path, utm_zone,
 )
 
 CENTRAL_ROOT = Path(r"W:\APPS\PIT\ATCO")
@@ -1097,8 +1097,8 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
         raise ValueError(f'Segment CRS does not match central AOI CRS for {circuit}')
 
     base = output_base(Path(output_root), circuit)
-    laz_dir = base / 'LAZ'
-    zlas_dir = base / 'zLAS'
+    laz_dir = base / product_folder('LAZ')
+    zlas_dir = base / product_folder('zLAS')
     qa_dir = base / 'QA' / 'LiDAR'
     temp_dir = qa_dir / 'temp_las_for_zlas'
     qa_dir.mkdir(parents=True, exist_ok=True)
