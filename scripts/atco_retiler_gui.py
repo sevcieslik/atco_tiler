@@ -1268,6 +1268,7 @@ class RetilerApp(tk.Tk):
                     rc = self._run_stream(args, env=env)
                     if rc:
                         raise RuntimeError(f"Converter failed for {record['entity']} (exit {rc})")
+                    self.log_queue.put(("ENTITY_DONE", record["entity"]))
                     continue
                 if any(p in selected for p in ("TIFF", "ECW")):
                     args = [
@@ -1298,6 +1299,7 @@ class RetilerApp(tk.Tk):
                     rc = self._run_stream(args, env=env)
                     if rc:
                         raise RuntimeError(f"LiDAR failed for {record['entity']} (exit {rc})")
+                self.log_queue.put(("ENTITY_DONE", record["entity"]))
             if self.stop_requested:
                 self.log_queue.put(("STOP", "Build stopped by operator"))
             else:
@@ -1570,6 +1572,9 @@ class RetilerApp(tk.Tk):
                 if kind == "LINE":
                     self.log(payload,"INFO")
                     self._parse_progress(payload)
+                elif kind == "ENTITY_DONE":
+                    self.log(f"Completed entity: {payload}", "INFO")
+                    self.refresh_product_status()
                 elif kind == "DONE":
                     self.log(payload,"INFO")
                     self._finish_run(True)
