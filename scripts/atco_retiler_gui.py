@@ -27,7 +27,7 @@ sys.path.insert(0, str(TOOL_ROOT))
 import atco_processor as core
 
 APP_NAME = "ATCO Retiler"
-APP_VERSION = "1.07"
+APP_VERSION = "1.08-dev"
 
 
 def current_commit():
@@ -898,6 +898,7 @@ class RetilerApp(tk.Tk):
 
         self.context = None
         self.blocks = []
+        self.cloud_blocks = []
         try:
             if self.mapped.get("aoi"):
                 sys.path.insert(0,str(MODULES))
@@ -906,7 +907,8 @@ class RetilerApp(tk.Tk):
                 circuit = po.circuit_from_polygon(shp)
                 rec = po.load_aoi_revision(circuit, shp)
                 _, seg = po.load_segments(circuit, rec["revision_code"])
-                self.blocks = [str(v) for v in seg["DeliveryName"].tolist()]
+                self.blocks = [str(v) for v in seg["ImageryName"].tolist()]
+                self.cloud_blocks = [str(v) for v in seg["PointCloudName"].tolist()]
                 self.context = (circuit, rec["revision_code"])
                 self.context_label.configure(text=f"{circuit} / {rec['revision_code']}")
             else:
@@ -952,8 +954,9 @@ class RetilerApp(tk.Tk):
             ("LAZ","LAZ",".laz"),
             ("zLAS","zLAS",".zlas"),
         ):
-            present = sum(1 for b in self.blocks if self._is_valid_file(base/folder/f"{b}{ext}"))
-            data[prod] = (len(self.blocks), present)
+            names = self.cloud_blocks if prod in ("LAZ", "zLAS") else self.blocks
+            present = sum(1 for b in names if self._is_valid_file(base/folder/f"{b}{ext}"))
+            data[prod] = (len(names), present)
         tile_shp = core.tile_index_shp_path(base, circuit)
         shp_ok = self._is_valid_file(tile_shp) and tile_shp.with_suffix('.dbf').is_file() and tile_shp.with_suffix('.shx').is_file()
         data["Tile Index"] = (1, 1 if shp_ok else 0)
