@@ -16,8 +16,9 @@ def discover_aois(path: Path, *, converter: bool = False):
     if not root.is_dir():
         raise FileNotFoundError(f"AOI path not found: {root}")
     files = sorted(
-        (p for p in root.rglob("*.shp")
-         if converter or p.stem.lower().endswith("_polygon")),
+        (p for p in root.rglob("*")
+         if p.is_file() and p.suffix.lower() == ".shp"
+         and (converter or p.stem.lower().endswith("_polygon"))),
         key=lambda p: str(p).casefold(),
     )
     if not files:
