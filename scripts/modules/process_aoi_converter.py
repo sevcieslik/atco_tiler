@@ -68,14 +68,17 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
         _inventory, transform, res, bands = ortho.raster_inventory(files, crs)
         bounds = ortho.align_bounds(geom.bounds, transform, res)
         pixels = round((bounds[2] - bounds[0]) / res[0]) * round((bounds[3] - bounds[1]) / res[1])
-        if pixels > 150_000_000:
-            raise ValueError(
-                f"Single AOI is {pixels:,} pixels; this converter currently caps a TIFF at "
-                "150 million pixels to avoid running out of memory. Split or use blockwise processing."
-            )
         tif = base / product_folder("TIFF", converter=True) / f"{stem}.tif"
-        status, valid, coverage = ortho.export_tile(
-            stem, bounds, geom, files, tif, bands, crs, res, overwrite=overwrite)
+        if pixels > 150_000_000:
+            from process_large_ortho import export_streamed_rgb_i, preflight_storage
+            if overwrite or not tif.is_file() or tif.stat().st_size == 0:
+                preflight_storage(tif.parent, pixels, ecw=make_ecw)
+            print(f"Large AOI: {pixels:,} pixels; exporting one BigTIFF in bounded windows.", flush=True)
+            status, valid, coverage = export_streamed_rgb_i(
+                stem, bounds, geom, files, tif, crs, res, overwrite=overwrite)
+        else:
+            status, valid, coverage = ortho.export_tile(
+                stem, bounds, geom, files, tif, bands, crs, res, overwrite=overwrite)
         if not tif.is_file() or tif.stat().st_size == 0:
             raise RuntimeError(f"TIFF could not be produced ({status}) for {entity}")
         results["products"]["TIFF"] = {"file": str(tif), "status": status, "coverage_pct": coverage}
