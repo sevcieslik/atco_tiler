@@ -39,9 +39,11 @@ class DashboardSmokeTests(unittest.TestCase):
         self.app.destroy()
 
     def test_build_dashboard_starts_with_selectable_products(self):
-        self.assertEqual(APP_VERSION, "1.07")
+        self.assertEqual(APP_VERSION, "1.08-dev")
         self.assertEqual(set(self.app.product_checks), {"TIFF", "ECW", "LAZ", "zLAS", "Tile Index"})
         self.assertEqual(len(self.app.exec_rows), 5)
+        self.assertTrue(hasattr(self.app, "aoi_list"))
+        self.assertEqual(self.app.process_mode.get(), "standard")
         self.assertEqual(len(self.app.selected_products()), 5)
         self.assertIn("Build", self.app.pages)
         self.assertIn("Data Sources", self.app.pages)
