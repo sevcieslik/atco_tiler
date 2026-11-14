@@ -8,6 +8,8 @@ on:
       - "tests/test_large_ortho.py"
       - "tests/test_aoi_converter.py"
       - "tests/test_aoi_batch.py"
+      - "tests/test_input_eligibility.py"
+      - "scripts/input_eligibility.py"
       - "tests/test_central_aoi_catalogue.py"
       - "scripts/central_aoi_catalogue.py"
       - "tests/test_lidar_auto_install.py"
