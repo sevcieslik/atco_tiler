@@ -16,7 +16,7 @@ def main():
     m=missing()
     if m:
         print('ERROR: GIS runtime is missing Python packages:',', '.join(m)); print('Run INSTALL_RUNTIME.bat to create/repair the conda environment.'); return 2
-    p=subprocess.run(['pdal','--version'],capture_output=True,text=True)
+    p=subprocess.run(['pdal','--version'],capture_output=True,text=True) if shutil.which('pdal') else subprocess.CompletedProcess(['pdal','--version'], 127, '', 'PDAL not installed')
     if p.returncode: print('NOTE: PDAL CLI not installed. TIFF/ECW remain available; run INSTALL_LIDAR_SUPPORT.bat for LAZ/zLAS.')
     print(f"PDAL   : {(p.stdout or p.stderr).strip()}")
     print(f"Central: {'OK' if (CENTRAL_ROOT/'database'/'atco_aoi_master.sqlite').is_file() else 'MISSING'}")
