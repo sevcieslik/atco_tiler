@@ -1040,12 +1040,19 @@ class RetilerApp(tk.Tk):
             from central_aoi_catalogue import get_standalone_records
             from aoi_batch import discover_aois
             import process_orthos as po
+            local_aois = []
             if self.mapped.get("aoi"):
-                for shp in discover_aois(self.mapped["aoi"], converter=False):
-                    self.aoi_options.append({
-                        "kind": "circuit", "entity": po.circuit_from_polygon(shp),
-                        "path": shp, "has_segments": True,
-                    })
+                try:
+                    local_aois = discover_aois(self.mapped["aoi"], converter=False)
+                except FileNotFoundError:
+                    # Registered area entities remain selectable even when
+                    # there are no local circuit polygons.
+                    pass
+            for shp in local_aois:
+                self.aoi_options.append({
+                    "kind": "circuit", "entity": po.circuit_from_polygon(shp),
+                    "path": shp, "has_segments": True,
+                })
             self.aoi_options += get_standalone_records()
             for item in self.aoi_options:
                 label = f"{item['entity']}  [{item['kind']}]"
