@@ -560,16 +560,19 @@ class RetilerApp(tk.Tk):
         mode_outer.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=6)
         mode_row = tk.Frame(mode_body, bg=CARD)
         mode_row.pack(fill="x", padx=16, pady=(0, 6))
+        self.mode_buttons = []
         for value, label in (
             ("standard", "Standard Retiler (TX / DX, central segments)"),
             ("converter", "AOI Converter (Telecoms / Substations, no segments)"),
         ):
-            tk.Radiobutton(
+            radio = tk.Radiobutton(
                 mode_row, text=label, value=value, variable=self.process_mode,
                 command=self._mode_changed, bg=CARD, fg=TEXT,
                 selectcolor=NAV_2, activebackground=CARD, activeforeground=TEXT,
                 font=("Segoe UI", 10),
-            ).pack(side="left", padx=(0, 25))
+            )
+            radio.pack(side="left", padx=(0, 25))
+            self.mode_buttons.append(radio)
         row = tk.Frame(mode_body, bg=CARD)
         row.pack(fill="x", padx=16, pady=(0, 12))
         self._dashboard_label(row, "Entities to process (Ctrl/Shift for multiple):",
@@ -1028,7 +1031,8 @@ class RetilerApp(tk.Tk):
         self._count_source_files()
         if hasattr(self, "summary_values"):
             self.summary_values["project"].configure(
-                text=f"{self.context[0]} / {self.context[1]}" if self.context else "Awaiting input")
+                text=f"{len(self.entity_records)} entities" if len(self.entity_records) > 1
+                else (f"{self.context[0]} / {self.context[1]}" if self.context else "Awaiting input"))
             self.summary_values["sources"].configure(
                 text=f"{self.source_tiff_count} + {self.source_lidar_count}")
             self.summary_values["segments"].configure(
@@ -1202,6 +1206,8 @@ class RetilerApp(tk.Tk):
                     return
 
         self.running = True
+        for radio in self.mode_buttons:
+            radio.configure(state="disabled")
         self.aoi_list.configure(state="disabled")
         for check in self.product_checks.values():
             check.configure(state="disabled")
@@ -1579,6 +1585,8 @@ class RetilerApp(tk.Tk):
         self.run_btn.configure(state="normal")
         self.rerun_btn.configure(state="normal")
         self.aoi_list.configure(state="normal")
+        for radio in self.mode_buttons:
+            radio.configure(state="normal")
         for name, check in self.product_checks.items():
             check.configure(state="disabled" if self.process_mode.get() == "converter"
                             and name == "Tile Index" else "normal")
