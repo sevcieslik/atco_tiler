@@ -416,11 +416,6 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
             dst.colorinterp = (
                 ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
             )
-            dst.update_tags(
-                ATCO_BLOCKNUM=blocknum,
-                ATCO_BACKGROUND_RULE='RGBI background 255,255,255,255; valid 255 values adjusted to 254',
-                ATCO_BAND4='NIR',
-            )
         with rasterio.open(final_tmp) as check:
             if check.nodata != 255:
                 raise RuntimeError(f'Expected GeoTIFF NoData=255 for ArcGIS Pro: {final_tmp}')
