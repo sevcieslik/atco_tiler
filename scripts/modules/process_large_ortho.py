@@ -86,12 +86,6 @@ def export_streamed_rgb_i(name, bounds, geom, files, out_tif: Path, crs, res,
             with rasterio.open(tmp, "w", **profile) as dst:
                 dst.colorinterp = (ColorInterp.red, ColorInterp.green,
                                    ColorInterp.blue, ColorInterp.undefined)
-                dst.update_tags(
-                    ATCO_BLOCKNUM=name,
-                    ATCO_BACKGROUND_RULE="RGBI background 255,255,255,255; valid 255 adjusted to 254",
-                    ATCO_BAND4="NIR",
-                    ATCO_EXPORT_MODE="Standalone AOI streamed windows",
-                )
                 nrows = (height + window_size - 1) // window_size
                 ncols = (width + window_size - 1) // window_size
                 all_chunks = nrows * ncols
