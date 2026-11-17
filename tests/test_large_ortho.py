@@ -36,6 +36,7 @@ class StreamedTIFFTests(unittest.TestCase):
             self.assertGreater(nvalid, 0)
             with rasterio.open(output) as ds:
                 self.assertEqual(ds.nodata, 255)
+                self.assertFalse(any(key.startswith('ATCO_') for key in ds.tags()), ds.tags())
                 self.assertEqual(ds.count, 4)
                 self.assertEqual(ds.width, 8)
                 self.assertEqual(ds.height, 8)
