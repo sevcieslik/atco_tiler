@@ -23,12 +23,10 @@ class DeliveryNamingTests(unittest.TestCase):
         self.assertNotEqual(delivery_imagery_name("9L137", "9L137_MU_0008"),
                             delivery_point_cloud_name("9L137", "9L137_MU_0008"))
 
-    def test_product_folders_are_mode_isolated(self):
+    def test_product_folders_are_uniform_for_all_entities(self):
         for product in ("TIFF", "ECW", "LAZ", "zLAS"):
-            self.assertEqual(product_folder(product), f"{product}_segments")
-            self.assertEqual(product_folder(product, converter=True), f"{product}_area")
-            self.assertNotEqual(product_folder(product),
-                                product_folder(product, converter=True))
+            self.assertEqual(product_folder(product), product)
+            self.assertEqual(product_folder(product, converter=True), product)
 
     def test_index_filename(self):
         self.assertEqual(tile_index_shp_path(Path("output/9L137"), "9L137").name,
