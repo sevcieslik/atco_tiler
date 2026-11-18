@@ -25,7 +25,7 @@ DOCS = TOOL_ROOT / "docs"
 
 sys.path.insert(0, str(TOOL_ROOT))
 import atco_processor as core
-from atco_delivery import product_folder
+from atco_delivery import product_folder, is_tx
 
 APP_NAME = "ATCO Retiler"
 APP_VERSION = "1.08-dev"
@@ -1359,7 +1359,7 @@ class RetilerApp(tk.Tk):
                     return
             if "Tile Index" in selected and any(
                     record["has_segments"] and
-                    record["entity"].upper().startswith(("7L", "9L"))
+                    is_tx(record["entity"])
                     for record in records):
                 self.log_queue.put(("LINE",
                     "Checking optional TX trajectory support for Tile Index..."))
