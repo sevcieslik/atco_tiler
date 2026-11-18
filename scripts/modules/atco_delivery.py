@@ -78,14 +78,15 @@ def enrich_segments(seg, entity: str):
 
 
 def product_folder(product: str, *, converter: bool = False) -> str:
-    """Keep segmented TX/DX and whole-area converter products isolated.
+    """Return the shared product folder for any registered entity.
 
-    Never reuse or overwrite the other processing mode's deliverable folder.
+    The entity directory already isolates circuit and area deliverables.
+    Keep the converter argument for existing callers; it has no effect.
     """
     names = {"TIFF", "ECW", "LAZ", "zLAS"}
     if product not in names:
         raise ValueError(f"Unknown deliverable product: {product}")
-    return f"{product}_{'area' if converter else 'segments'}"
+    return product
 
 
 def output_base(output_root: Path, entity: str) -> Path:
