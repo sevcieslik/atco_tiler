@@ -1020,6 +1020,10 @@ class RetilerApp(tk.Tk):
             allow_index = bool(self.has_segmented_entities())
             self.product_checks["Tile Index"].configure(
                 state="normal" if allow_index else "disabled")
+            if not allow_index:
+                # An area produces no tile index; its disabled checkbox
+                # should not misleadingly remain checked.
+                self.product_vars["Tile Index"].set(False)
             self._sync_product_selection()
         if hasattr(self, "summary_values"):
             self.summary_values["project"].configure(
