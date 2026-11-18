@@ -795,9 +795,19 @@ class RetilerApp(tk.Tk):
             self.product_vars["LAZ"].set(True)
         if changed == "LAZ" and not self.product_vars["LAZ"].get():
             self.product_vars["zLAS"].set(False)
-        if hasattr(self, "input_validated") and self.input_validated:
+        if self.validating:
+            # Avoid accepting changed requirements while the background
+            # coverage scan still targets the prior product selection.
+            self.log("Product selection changed during validation; validate again.", "WARN")
+            self._invalidate_input_validation()
+            self._sync_product_selection()
+            return
+        if self.input_validated and changed != "Tile Index":
+            # Imagery/LiDAR changes alter the source coverage requirements.
             self._invalidate_input_validation()
         else:
+            # Tile Index is geometry-only for a validated circuit. Toggling it
+            # must not discard eligible entities or source coverage results.
             self._sync_product_selection()
 
     # ---------- Mapping page ----------
@@ -1010,8 +1020,6 @@ class RetilerApp(tk.Tk):
             allow_index = bool(self.has_segmented_entities())
             self.product_checks["Tile Index"].configure(
                 state="normal" if allow_index else "disabled")
-            if not allow_index:
-                self.product_vars["Tile Index"].set(False)
             self._sync_product_selection()
         if hasattr(self, "summary_values"):
             self.summary_values["project"].configure(
@@ -1077,7 +1085,9 @@ class RetilerApp(tk.Tk):
         self.aoi_list.configure(state="normal")
         self.aoi_list.delete(0, "end")
         self.context_label.configure(text="Select local input, then Validate Input to find eligible entities")
-        self.product_vars["Tile Index"].set(False)
+        # Index availability is determined again from eligible entities.
+        # Preserve prior intent rather than silently dropping the operator's
+        # choice whenever a source requirement needs fresh validation.
         self.product_checks["Tile Index"].configure(state="disabled")
         self._sync_product_selection()
         if hasattr(self, "summary_values"):
