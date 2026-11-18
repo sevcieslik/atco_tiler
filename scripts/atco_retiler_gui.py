@@ -1269,7 +1269,7 @@ class RetilerApp(tk.Tk):
             return
         selected = self.selected_products()
         if not selected:
-            messagebox.showwarning(APP_NAME, "Select at least one product to build.")
+            messagebox.showwarning(APP_NAME, "Select at least one product to process.")
             return
         if not self.context:
             messagebox.showerror(APP_NAME, "Circuit/revision could not be detected from the AOI.")
@@ -1305,8 +1305,8 @@ class RetilerApp(tk.Tk):
                 if not messagebox.askyesno(
                     "Overwrite existing output",
                     f"Existing output found for {circuit} / {rev}:\n\n{lines}\n\n"
-                    "Full Build will overwrite existing selected products.\n"
-                    "Use Rerun Missing if you only want to fill gaps.\n\nContinue?"
+                    "Process will overwrite existing selected products.\n"
+                    "Use Process Missing if you only want to fill gaps.\n\nContinue?"
                 ):
                     return
 
@@ -1355,7 +1355,7 @@ class RetilerApp(tk.Tk):
                     raise RuntimeError(
                         "Automatic PDAL setup failed. See Activity Log for Conda errors.")
                 if self.stop_requested:
-                    self.log_queue.put(("STOP", "Build stopped during PDAL setup"))
+                    self.log_queue.put(("STOP", "Processing stopped during PDAL setup"))
                     return
             if "Tile Index" in selected and any(
                     record["has_segments"] and
@@ -1437,12 +1437,12 @@ class RetilerApp(tk.Tk):
                         raise RuntimeError(f"LiDAR failed for {record['entity']} (exit {rc})")
                 self.log_queue.put(("ENTITY_DONE", record["entity"]))
             if self.stop_requested:
-                self.log_queue.put(("STOP", "Build stopped by operator"))
+                self.log_queue.put(("STOP", "Processing stopped by operator"))
             else:
-                self.log_queue.put(("DONE", f"Build complete: {len(records)} entities"))
+                self.log_queue.put(("DONE", f"Processing complete: {len(records)} entities"))
         except Exception as exc:
             if self.stop_requested:
-                self.log_queue.put(("STOP", "Build stopped by operator"))
+                self.log_queue.put(("STOP", "Processing stopped by operator"))
             else:
                 self.log_queue.put(("FAIL", str(exc)))
 
@@ -1582,7 +1582,7 @@ class RetilerApp(tk.Tk):
     def stop_build(self, confirm=True):
         if not self.running:
             return
-        if confirm and not messagebox.askyesno(APP_NAME, "Stop the current build? Completed products will be kept."):
+        if confirm and not messagebox.askyesno(APP_NAME, "Stop the current process? Completed products will be kept."):
             return
         self.stop_requested = True
         self.status_text.configure(text="Stopping...")
@@ -1595,7 +1595,7 @@ class RetilerApp(tk.Tk):
 
     def on_close(self):
         if self.running:
-            if not messagebox.askyesno(APP_NAME, "A build is running. Stop it and exit?"):
+            if not messagebox.askyesno(APP_NAME, "Processing is running. Stop it and exit?"):
                 return
             self.stop_requested = True
             self._terminate_process_tree()
@@ -1771,7 +1771,7 @@ class RetilerApp(tk.Tk):
         self.status_dot.configure(fg=AMBER if stopped else ("#48bd54" if ok else RED))
         self.refresh_product_status()
         if stopped:
-            messagebox.showinfo(APP_NAME, "Build stopped. Completed products were kept; temporary/zero-byte files were cleaned.")
+            messagebox.showinfo(APP_NAME, "Processing stopped. Completed products were kept; temporary/zero-byte files were cleaned.")
         elif ok:
             messagebox.showinfo(APP_NAME, "Processing finished.")
         else:
