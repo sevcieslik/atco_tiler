@@ -59,6 +59,38 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertEqual(self.app.validate_btn["text"], "✓  Validate Input")
         self.assertEqual(self.app.run_btn["state"], "disabled")
 
+    def test_excluded_area_does_not_block_circuit_or_tile_index(self):
+        """UAT: 9L137 eligible, Battle River excluded on imagery."""
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "modules"))
+        import process_orthos as ortho
+        eligible = [{
+            "kind": "circuit", "entity": "9L137", "revision": "R01",
+            "has_segments": True, "path": Path("input/aoi/9L137_Polygon.shp"),
+        }]
+        excluded = [("BATTLE_RIVER_Substation", "insufficient imagery footprint coverage")]
+        self.app._validation_products = ("TIFF", "ECW", "LAZ", "zLAS")
+        with (patch.object(ortho, "load_aoi_revision", return_value={"revision_code": "R01"}),
+              patch.object(ortho, "load_segments", return_value=(Path("segments.shp"), {
+                  "ImageryName": ["9L137_0001_2026_5cm_RGBN_v1"],
+                  "PointCloudName": ["9L137_0001_v1"],
+              })),
+              patch.object(gui.messagebox, "showinfo")):
+            self.app._apply_eligible_entities(eligible, excluded)
+        self.assertTrue(self.app.input_validated)
+        self.assertEqual(self.app.aoi_list.size(), 1)
+        self.assertEqual(len(self.app.entity_records), 1)
+        self.assertEqual(self.app.entity_records[0]["entity"], "9L137")
+        self.assertEqual(self.app.run_btn["state"], "normal")
+        self.assertEqual(self.app.product_checks["Tile Index"]["state"], "normal")
+        for checked in (False, True):
+            self.app.product_vars["Tile Index"].set(checked)
+            self.app._enforce_product_dependencies("Tile Index")
+            self.assertTrue(self.app.input_validated)
+            self.assertEqual(self.app.aoi_list.size(), 1)
+            self.assertEqual(self.app.context, ("9L137", "R01"))
+            self.assertEqual(self.app.run_btn["state"], "normal")
+        self.assertIn("Tile Index", self.app.selected_products())
+
     def test_select_all_and_dependencies(self):
         self.app.set_all_products(False)
         self.assertEqual(self.app.selected_products(), [])
