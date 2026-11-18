@@ -1550,8 +1550,8 @@ class RetilerApp(tk.Tk):
                         p.unlink()
                 except OSError:
                     pass
-            for folder in (base / name for product in ("TIFF", "ECW", "LAZ", "zLAS")
-                           for name in (product_folder(product), product_folder(product, converter=True))):
+            for folder in (base / product_folder(product)
+                           for product in ("TIFF", "ECW", "LAZ", "zLAS")):
                 if folder.is_dir():
                     for p in folder.iterdir():
                         try:
