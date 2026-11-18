@@ -37,7 +37,7 @@
 <h3>Class 7 appears in delivered LAZ</h3><p>This should not happen. LAZ processing explicitly removes Classification 7. Check the final LAZ, not the source file, and review the LiDAR processing report.</p>
 <h3>Return Number 0 / Synthetic warning</h3><p>Retiler reports this condition but does not change it automatically. Review <code>QA\LiDAR\return0_flag_by_class.csv</code>.</p>
 <div class="warn"><strong>Do not apply a blanket ReturnNumber=0 → Synthetic rule.</strong> ATCO sample analysis found Return 0 points in Class 93 that require interpretation rather than an automatic flag change.</div>
-<h3>EzLAS windows appear</h3><p>v1.07 launches EzLAS hidden and actively hides EzLAS/child windows while conversion is running. If windows still appear, capture a screenshot and note whether it occurs during conversion or verification; the zLAS output itself can still be valid.</p>
+<h3>EzLAS windows appear</h3><p>v1.08 launches EzLAS hidden and actively hides EzLAS/child windows while conversion is running. If windows still appear, capture a screenshot and note whether it occurs during conversion or verification; the zLAS output itself can still be valid.</p>
 <h3>zLAS missing / validation failed</h3><p>Review <code>QA\LiDAR\EzLAS\zlas_validation.csv</code> and the corresponding command/log file. Retiler only accepts a zLAS after EzLAS verification.</p></section>
 
 <section class="card"><h2>Tile Index troubleshooting (circuits only)</h2>
