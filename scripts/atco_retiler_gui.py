@@ -1357,6 +1357,21 @@ class RetilerApp(tk.Tk):
                 if self.stop_requested:
                     self.log_queue.put(("STOP", "Build stopped during PDAL setup"))
                     return
+            if "Tile Index" in selected and any(
+                    record["has_segments"] and
+                    record["entity"].upper().startswith(("7L", "9L"))
+                    for record in records):
+                self.log_queue.put(("LINE",
+                    "Checking optional TX trajectory support for Tile Index..."))
+                rc = self._run_stream(
+                    [sys.executable, str(TOOL_ROOT / "ensure_trajectory_support.py")],
+                    env=env)
+                if rc:
+                    raise RuntimeError(
+                        "Automatic PyArrow setup failed. See Activity Log.")
+                if self.stop_requested:
+                    self.log_queue.put(("STOP", "Processing stopped during PyArrow setup"))
+                    return
             for idx, record in enumerate(records, 1):
                 if self.stop_requested:
                     break
