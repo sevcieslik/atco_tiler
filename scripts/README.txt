@@ -82,27 +82,25 @@ metadata; there is no extra R01 folder in the delivery layout.
 
 PRODUCTS AND FOLDERS
 --------------------
-Circuits (segmented outputs):
-  output\<ENTITY>\TIFF_segments\
-  output\<ENTITY>\ECW_segments\
-  output\<ENTITY>\LAZ_segments\
-  output\<ENTITY>\zLAS_segments\
+Every entity uses the same delivery structure, regardless of whether
+its approved geometry is a segmented circuit or a whole-polygon area:
+
+  output\<ENTITY>\TIFF\
+  output\<ENTITY>\ECW\
+  output\<ENTITY>\LAZ\
+  output\<ENTITY>\zLAS\
+  output\<ENTITY>\QA\
+
+Circuits additionally produce:
   output\<ENTITY>\Tile_Index\
-  output\<ENTITY>\QA\
 
-Areas (single AOI outputs):
-  output\<ENTITY>\TIFF_area\
-  output\<ENTITY>\ECW_area\
-  output\<ENTITY>\LAZ_area\
-  output\<ENTITY>\zLAS_area\
-  output\<ENTITY>\QA\
-
-Segmented and unsegmented products never share a product directory.
-Legacy output/<ENTITY>/{TIFF,ECW,LAZ,zLAS} directories from v1.07 are
-not migrated or counted as v1.08 cache entries.
-Circuit Tile Index is an intermediate SHP under Tile_Index; it becomes
-the TILES feature class when the final File GDB is assembled. Areas have
-no Tile Index and no required circuit alignment/segmentation.
+The entity folder isolates outputs; no _segments or _area suffix is
+needed. Area entities have no Tile Index and do not need circuit alignment.
+Existing *_segments / *_area directories from earlier v1.08 UAT runs
+are left intact, never silently moved or deleted. They are NOT treated as
+cached outputs after this change. Start a fresh output revision or rebuild
+the required products in their new standard folders. Circuit Tile Index
+remains an intermediate SHP, later assembled into final TILES feature class.
 
 Circuit delivery filename examples (central BlockNum retained internally):
   9L137_MU_0001 -> 9L137_0001
