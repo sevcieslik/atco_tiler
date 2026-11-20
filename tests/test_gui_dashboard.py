@@ -83,7 +83,9 @@ class DashboardSmokeTests(unittest.TestCase):
             # Correct selection is immediately possible without restarting.
             self.app.product_vars["LAZ"].set(False)
             self.app._enforce_product_dependencies("LAZ")
-            self.app.validate_setup()
+            with patch.object(gui.threading, "Thread") as worker:
+                self.app.validate_setup()
+                worker.assert_called_once()
             self.assertTrue(self.app.validating)
             self.assertEqual(self.app.validate_btn["state"], "disabled")
 
