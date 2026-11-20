@@ -1810,7 +1810,7 @@ class RetilerApp(tk.Tk):
                 })
                 self.validate_btn.configure(state="normal", text="✓  Validate Input")
                 messagebox.showwarning(APP_NAME,
-                    "LAZ/zLAS is selected but Input/point_cloud contains no LAS/LAZ files.\\n\\n"
+                    "LAZ/zLAS is selected but Input/point_cloud contains no LAS/LAZ files.\n\n"
                     "Add point cloud files or deselect LAZ and zLAS, then Validate Input again.")
                 return
         self.validating = True
