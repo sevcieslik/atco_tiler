@@ -52,6 +52,7 @@ class OrthoMaskTests(unittest.TestCase):
             self.assertTrue(status.startswith("created"), status)
             with rasterio.open(out) as ds:
                 self.assertEqual(ds.nodata, 255)
+                self.assertFalse(any(key.startswith('ATCO_') for key in ds.tags()), ds.tags())
                 self.assertEqual(ds.count, 4)
                 self.assertEqual(ds.colorinterp[3], ColorInterp.undefined)
                 self.assertTrue(ds.dataset_mask()[0,:].max() == 0)

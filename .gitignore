@@ -26,3 +26,6 @@ Thumbs.db
 .DS_Store
 *.aux.xml
 *.ovr
+
+# Installation diagnostics (local machine/user paths and package output)
+scripts/logs/

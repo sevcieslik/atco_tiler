@@ -27,7 +27,7 @@ from shapely import wkb
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-from atco_delivery import enrich_segments, output_base
+from atco_delivery import enrich_segments, output_base, product_folder
 
 CENTRAL_ROOT = Path(r"W:\APPS\PIT\ATCO")
 DB_PATH = CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite"
@@ -416,11 +416,6 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
             dst.colorinterp = (
                 ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
             )
-            dst.update_tags(
-                ATCO_BLOCKNUM=blocknum,
-                ATCO_BACKGROUND_RULE='RGBI background 255,255,255,255; valid 255 values adjusted to 254',
-                ATCO_BAND4='NIR',
-            )
         with rasterio.open(final_tmp) as check:
             if check.nodata != 255:
                 raise RuntimeError(f'Expected GeoTIFF NoData=255 for ArcGIS Pro: {final_tmp}')
@@ -481,7 +476,7 @@ def gms_quote(path: Path):
 def build_gm_rgb_input(src_tif: Path, out_tif: Path):
     """Three-band visual ECW source: RGB, with invalid TIFF pixels set white.
 
-    The client TIFF keeps four RGBI bands and its internal dataset mask.
+    The client TIFF keeps four RGBI bands and uses explicit NoData=255.
     The Global Mapper ECW input has neither NIR nor Alpha nor scalar NoData.
     """
     out_tif.parent.mkdir(parents=True, exist_ok=True)
@@ -852,8 +847,8 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
     print(f'Raster grid: {res[0]:g} x {res[1]:g} m; data bands: {band_count}', flush=True)
 
     base = output_base(Path(output_root), circuit)
-    tif_dir = base/'TIFF'
-    ecw_dir = base/'ECW'
+    tif_dir = base / product_folder('TIFF')
+    ecw_dir = base / product_folder('ECW')
     qa_root = base/'QA'
     qa_dir = qa_root/'Imagery'
     index_dir = qa_root/'Ortho_Processing_Footprints'
@@ -946,7 +941,7 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
         'ecw_bands': 3 if make_ecw else None, 'pixel_size': list(res),
         'ortho_processing_footprint_count': len(ortho_index), 'footprint_gap_m2': gap,
         'footprint_overlap_m2': overlap_m2, 'footprint_overlap_pairs': overlap_pairs,
-        'tiff_background': '4-band RGBI with an internal TIFF validity mask; valid 255 preserved; nodata unset',
+        'tiff_background': '4-band RGBI; NoData=255; invalid pixels white; valid 255 normalized to 254',
         'ecw_background': '3-band RGB with white background (255,255,255), no alpha, ECW v3' if make_ecw else None,
         'ecw_rgb_source': 'dedicated 3-band RGB copy of TIFF bands 1/2/3, white fill outside validity mask' if make_ecw else None,
         'parallel_workers_config': configured_parallel_workers(), 'output_root': str(base),

@@ -1,0 +1,44 @@
+# ATCO Retiler installation logger. Requires only Windows PowerShell 5.1.
+# The complete Conda console output is mirrored to a timestamped local file.
+$ErrorActionPreference = 'Continue'
+$root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$logDir = Join-Path $root 'logs'
+New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+$stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
+$log = Join-Path $logDir "install_runtime_$stamp.log"
+$core = Join-Path $root 'INSTALL_RUNTIME_CORE.bat'
+$started = Get-Date
+$writer = New-Object System.IO.StreamWriter($log, $false, (New-Object System.Text.UTF8Encoding($false)))
+$writer.AutoFlush = $true
+function Log-Line([string]$line) {
+    $entry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] $line"
+    Write-Host $entry
+    $writer.WriteLine($entry)
+}
+$rc = 1
+try {
+    Log-Line 'ATCO v1.08 runtime installation started'
+    Log-Line "Computer: $env:COMPUTERNAME | User: $env:USERNAME | PowerShell: $($PSVersionTable.PSVersion)"
+    Log-Line "Project folder: $(Split-Path -Parent $root)"
+    Log-Line "Environment: $(Join-Path $root '.venv')"
+    Log-Line "Log: $log"
+    if (-not (Test-Path $core)) { throw "Missing installer: $core" }
+    # cmd /d /c runs the original Conda installer with its native exit code.
+    # Forward its full stdout/stderr to the console and the durable log.
+    & cmd.exe /d /c ('"' + $core + '"') 2>&1 | ForEach-Object {
+        Log-Line ([string]$_)
+    }
+    $rc = $LASTEXITCODE
+    if ($null -eq $rc) { $rc = 1 }
+}
+catch {
+    Log-Line "ERROR: $($_.Exception.Message)"
+    $rc = 1
+}
+finally {
+    $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
+    Log-Line "ATCO runtime installation finished | exit_code=$rc | elapsed_seconds=$seconds"
+    $writer.Dispose()
+    Write-Host "Installation log saved: $log"
+}
+exit $rc

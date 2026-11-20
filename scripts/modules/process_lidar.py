@@ -24,7 +24,7 @@ from shapely.ops import unary_union
 
 from atco_delivery import (
     YEAR as DELIVERY_YEAR, client_entity_name,
-    enrich_segments, entity_type, is_tx, output_base, tile_index_shp_path, utm_zone,
+    enrich_segments, entity_type, is_tx, output_base, product_folder, tile_index_shp_path, utm_zone,
 )
 
 CENTRAL_ROOT = Path(r"W:\APPS\PIT\ATCO")
@@ -547,15 +547,25 @@ def gps_time_range(laz_path: Path):
 def load_trajectory_index():
     path = TRAJECTORY_ROOT / 'trajectory_index.parquet'
     if not path.is_file():
+        print('NOTE: TX trajectory index missing; fldate/Flightline will be blank.', flush=True)
         return None
     try:
+        import pyarrow  # noqa: F401 - optional, not part of the base GIS runtime
+    except ImportError as exc:
+        raise RuntimeError(
+            'TX trajectory attribution needs optional PyArrow. Run '
+            'INSTALL_TRAJECTORY_SUPPORT.bat and retry. '
+            'Without it the Tile Index would have missing flight metadata.'
+        ) from exc
+    try:
         df = pd.read_parquet(path)
-        required = {'date_from_folder', 'flightline_code', 'las_adjusted_gps_start', 'las_adjusted_gps_end'}
-        if not required.issubset(df.columns):
-            return None
-        return df
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f'Cannot read TX trajectory index: {path}: {exc}') from exc
+    required = {'date_from_folder', 'flightline_code',
+                'las_adjusted_gps_start', 'las_adjusted_gps_end'}
+    if not required.issubset(df.columns):
+        raise ValueError(f'Trajectory index missing columns {required - set(df.columns)}: {path}')
+    return df
 
 
 def trajectory_attributes(laz_path: Path, trajectory_index):
@@ -602,14 +612,14 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
             fldate = ''
             flightline = ''
             if laz_dir is not None:
-                laz_path = laz_dir / f'{row.DeliveryName}.laz'
+                laz_path = laz_dir / f'{row.PointCloudName}.laz'
                 fldate, flightline = trajectory_attributes(laz_path, trajectory_index)
             records.append({
                 'BlockNum': str(row.TileSeq),
                 'ZONE': str(zone),
                 'YEAR': str(YEAR),
                 'LINE': str(circuit),
-                'NAME': str(row.DeliveryName),
+                'NAME': str(row.PointCloudName),
                 'fldate': fldate,
                 'Flightline': flightline,
                 'geometry': row.geometry,
@@ -1087,8 +1097,8 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
         raise ValueError(f'Segment CRS does not match central AOI CRS for {circuit}')
 
     base = output_base(Path(output_root), circuit)
-    laz_dir = base / 'LAZ'
-    zlas_dir = base / 'zLAS'
+    laz_dir = base / product_folder('LAZ')
+    zlas_dir = base / product_folder('zLAS')
     qa_dir = base / 'QA' / 'LiDAR'
     temp_dir = qa_dir / 'temp_las_for_zlas'
     qa_dir.mkdir(parents=True, exist_ok=True)
@@ -1129,7 +1139,7 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
 
     segment_jobs = []
     for _, row in seg.iterrows():
-        segment_jobs.append((str(row.DeliveryName), row))
+        segment_jobs.append((str(row.PointCloudName), row))
 
     laz_workers = resolve_parallel_workers(configured_parallel_workers(), len(segment_jobs))
 
