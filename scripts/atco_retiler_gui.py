@@ -1731,6 +1731,7 @@ class RetilerApp(tk.Tk):
                         for key in ("aoi", "orthos", "point_cloud")
                     })
                     self.log(f"Validation failed: {payload}", "ERROR")
+                    self._sync_product_selection()
                     messagebox.showerror(APP_NAME, f"Input validation failed:\\n\\n{payload}")
                 elif kind == "ENTITY_DONE":
                     self.log(f"Completed entity: {payload}", "INFO")
@@ -1796,6 +1797,22 @@ class RetilerApp(tk.Tk):
         if any(p in selected for p in ("LAZ", "zLAS")) and not self.mapped.get("point_cloud"):
             messagebox.showwarning(APP_NAME, "Input/point_cloud is missing.")
             return
+        # A mapped directory is not proof of input data. Reject empty cloud
+        # folders before starting a worker or installing optional PDAL.
+        if any(p in selected for p in ("LAZ", "zLAS")):
+            cloud_dir = Path(self.mapped["point_cloud"])
+            if not any(p.is_file() and p.suffix.lower() in (".las", ".laz")
+                       for p in cloud_dir.rglob("*")):
+                self.log("VALIDATE: no LAS/LAZ files under Input/point_cloud; "
+                         "select TIFF/ECW only or add point cloud files.", "WARN")
+                self._set_input_badges({
+                    "aoi": "pending", "orthos": "pending", "point_cloud": "error",
+                })
+                self.validate_btn.configure(state="normal", text="✓  Validate Input")
+                messagebox.showwarning(APP_NAME,
+                    "LAZ/zLAS is selected but Input/point_cloud contains no LAS/LAZ files.\\n\\n"
+                    "Add point cloud files or deselect LAZ and zLAS, then Validate Input again.")
+                return
         self.validating = True
         self._validation_products = tuple(selected)
         self.validate_btn.configure(state="disabled", text="Checking coverage...")
