@@ -59,6 +59,34 @@ class DashboardSmokeTests(unittest.TestCase):
         self.assertEqual(self.app.validate_btn["text"], "✓  Validate Input")
         self.assertEqual(self.app.run_btn["state"], "disabled")
 
+    def test_empty_cloud_with_laz_selected_fails_fast_and_recovers(self):
+        """No PDAL install or background coverage worker for empty LiDAR."""
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "point_cloud").mkdir()
+            (root / "aoi").mkdir()
+            self.app.mapped = {
+                "aoi": root / "aoi", "orthos": root,
+                "point_cloud": root / "point_cloud",
+            }
+            self.app.product_vars["LAZ"].set(True)
+            self.app.product_vars["zLAS"].set(True)
+            with (patch.object(gui.threading, "Thread") as worker,
+                  patch.object(gui.messagebox, "showwarning") as warning):
+                self.app.validate_setup()
+                self.assertTrue(warning.called)
+                worker.assert_not_called()
+            self.assertFalse(self.app.validating)
+            self.assertFalse(self.app.input_validated)
+            self.assertEqual(self.app.validate_btn["state"], "normal")
+            self.assertEqual(self.app.input_badge_states["point_cloud"], "error")
+            # Correct selection is immediately possible without restarting.
+            self.app.product_vars["LAZ"].set(False)
+            self.app._enforce_product_dependencies("LAZ")
+            self.app.validate_setup()
+            self.assertTrue(self.app.validating)
+            self.assertEqual(self.app.validate_btn["state"], "disabled")
+
     def test_excluded_area_does_not_block_circuit_or_tile_index(self):
         """UAT: 9L137 eligible, Battle River excluded on imagery."""
         sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "modules"))
