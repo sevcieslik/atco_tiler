@@ -22,6 +22,8 @@ from shapely import wkb
 from shapely.geometry import box
 from shapely.ops import unary_union
 
+from cloud_source_selection import select_entity_clouds
+
 from atco_delivery import (
     YEAR as DELIVERY_YEAR, client_entity_name,
     enrich_segments, entity_type, is_tx, output_base, product_folder, tile_index_shp_path, utm_zone,
@@ -1117,7 +1119,10 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
         (qa_dir / 'execution.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
         return summary
 
-    files = source_clouds(source_folder)
+    with sqlite3.connect(str(DB_PATH)) as con:
+        known_entities = [row[0] for row in con.execute("SELECT entity_id FROM entities")]
+    files, selection_mode = select_entity_clouds(source_folder, circuit, known_entities)
+    print(f"LiDAR source selection for {circuit}: {selection_mode}, {len(files)} file(s)", flush=True)
     inventory, point_cloud_crs, cloud_crs_meta = cloud_inventory(files, aoi['crs'], qa_dir)
 
     ezlas = None
