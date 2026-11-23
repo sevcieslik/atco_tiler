@@ -8,12 +8,28 @@ $stamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 $log = Join-Path $logDir "install_runtime_$stamp.log"
 $core = Join-Path $root 'INSTALL_RUNTIME_CORE.bat'
 $started = Get-Date
-$writer = New-Object System.IO.StreamWriter($log, $false, (New-Object System.Text.UTF8Encoding($false)))
-$writer.AutoFlush = $true
+# New-Object cannot reliably bind the nested constructor expression in
+# Windows PowerShell 5.1; use explicit .NET constructor calls instead.
+$writer = $null
+try {
+    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
+    $writer = New-Object System.IO.StreamWriter -ArgumentList @($log, $false, $encoding)
+    $writer.AutoFlush = $true
+}
+catch {
+    Write-Warning "Could not open installation log '$log': $($_.Exception.Message). Continuing without file logging."
+}
 function Log-Line([string]$line) {
     $entry = "[$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff')] $line"
     Write-Host $entry
-    $writer.WriteLine($entry)
+    if ($null -ne $script:writer) {
+        try { $script:writer.WriteLine($entry) }
+        catch {
+            Write-Warning "Installation log write failed: $($_.Exception.Message). Continuing installer."
+            try { $script:writer.Dispose() } catch {}
+            $script:writer = $null
+        }
+    }
 }
 $rc = 1
 try {
@@ -38,7 +54,11 @@ catch {
 finally {
     $seconds = [math]::Round(((Get-Date) - $started).TotalSeconds, 1)
     Log-Line "ATCO runtime installation finished | exit_code=$rc | elapsed_seconds=$seconds"
-    $writer.Dispose()
-    Write-Host "Installation log saved: $log"
+    if ($null -ne $writer) {
+        $writer.Dispose()
+        Write-Host "Installation log saved: $log"
+    } else {
+        Write-Warning "Installation completed without a file log. See console output."
+    }
 }
 exit $rc
