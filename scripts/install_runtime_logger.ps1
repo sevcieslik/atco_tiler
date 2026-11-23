@@ -12,8 +12,8 @@ $started = Get-Date
 # Windows PowerShell 5.1; use explicit .NET constructor calls instead.
 $writer = $null
 try {
-    $encoding = New-Object System.Text.UTF8Encoding -ArgumentList $false
-    $writer = New-Object System.IO.StreamWriter -ArgumentList @($log, $false, $encoding)
+    $encoding = [System.Text.UTF8Encoding]::new($false)
+    $writer = [System.IO.StreamWriter]::new($log, $false, $encoding)
     $writer.AutoFlush = $true
 }
 catch {
