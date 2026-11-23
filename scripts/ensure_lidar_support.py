@@ -10,7 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from runtime_package_manager import package_command
+from runtime_package_manager import install_optional_package
 
 ROOT = Path(__file__).resolve().parent
 ENV = ROOT / ".venv"
@@ -49,18 +49,7 @@ def main():
         return 0
 
     print(f"PDAL missing: adding it to existing runtime {ENV} via ATCO Micromamba", flush=True)
-    install = package_command("pdal")
-    proc = subprocess.Popen(install, stdout=subprocess.PIPE,
-                            stderr=subprocess.STDOUT, text=True,
-                            bufsize=1, errors="replace")
-    for line in proc.stdout:
-        print(line.rstrip(), flush=True)
-    result = proc.wait()
-    if result != 0:
-        raise RuntimeError(
-            f"ATCO Micromamba PDAL installation failed (exit {result}); "
-            "check the Activity Log. No full environment rebuild was requested."
-        )
+    install_optional_package("pdal")
     if not pdal_ready():
         raise RuntimeError("Micromamba completed, but PDAL cannot be started.")
     print("PDAL installed and validated. Continuing selected build.", flush=True)
