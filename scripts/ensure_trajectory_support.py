@@ -10,8 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from runtime_package_manager import ENV
-from runtime_package_manager import install_optional_package
+from ensure_lidar_support import ENV, find_conda
 
 INDEX = Path(r"W:\APPS\PIT\ATCO\source\trajectories\trajectory_index.parquet")
 
@@ -34,13 +33,29 @@ def main():
     if pyarrow_ready():
         print("TX trajectory support (PyArrow) already available.", flush=True)
         return 0
-    print(f"TX Tile Index needs PyArrow: installing into existing {ENV} via ATCO Micromamba", flush=True)
-    install_optional_package("pyarrow")
+    conda = find_conda()
+    print(f"TX Tile Index needs PyArrow: installing into existing {ENV}", flush=True)
+    cmd = [
+        str(conda), "install", "--yes", "--prefix", str(ENV),
+        "--override-channels", "--strict-channel-priority",
+        "-c", "conda-forge", "pyarrow",
+    ]
+    if conda.suffix.lower() == ".bat":
+        if os.name != "nt":
+            raise RuntimeError("conda.bat requires Windows")
+        cmd = ["cmd.exe", "/d", "/c", *cmd]
+    process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                               stderr=subprocess.STDOUT, text=True,
+                               bufsize=1, errors="replace")
+    for line in process.stdout:
+        print(line.rstrip(), flush=True)
+    if process.wait():
+        raise RuntimeError("PyArrow Conda installation failed; see Activity Log.")
     # The new package may not be visible in the parent import cache.
     import importlib
     importlib.invalidate_caches()
     if not pyarrow_ready():
-        raise RuntimeError("Micromamba finished, but PyArrow cannot be imported.")
+        raise RuntimeError("Conda finished, but PyArrow cannot be imported.")
     print("PyArrow installed and validated. Continuing TX Tile Index.", flush=True)
     return 0
 
