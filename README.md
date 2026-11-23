@@ -37,7 +37,7 @@ Do not append `_segments` or `_area` to these directories. Earlier v1.08 UAT fol
 
 ## Optional dependencies
 
-The base Conda runtime stays lightweight. If LAZ/zLAS requires PDAL, or a TX Tile Index requires PyArrow for trajectory attribution, the application can install the optional dependency in the existing project-local `.venv`. Global Mapper is required for ECW and EzLAS.exe for zLAS. No second system Python is required.
+The installer downloads its own standalone **Micromamba** executable to `scripts/.installer/` from the official mamba-org GitHub release if necessary, and creates the project-local Python 3.11 `scripts/.venv`. No host Conda installation or solver configuration is required or altered. This first download requires access to GitHub; conda-forge is used for packages. If LAZ/zLAS needs PDAL or a TX Tile Index needs PyArrow, the application installs that optional dependency using the same ATCO Micromamba. Global Mapper is required for ECW and EzLAS.exe for zLAS. Install diagnostics are saved in `scripts/logs/install_runtime_*.log`.
 
 See `scripts/README.txt`, `scripts/docs/technical_notes.html`, `scripts/docs/faq_troubleshooting_qa.html`, and the in-app **How to Start** page for full usage, troubleshooting and QA details.
 
