@@ -10,14 +10,14 @@ import ensure_lidar_support as lidar_setup
 
 class PDALSetupTests(unittest.TestCase):
     @patch.object(lidar_setup, "pdal_ready", return_value=True)
-    @patch.object(lidar_setup, "package_command")
+    @patch.object(lidar_setup, "install_optional_package")
     def test_installed_pdal_requires_no_mamba_or_download(self, mamba, ready):
         with patch.object(lidar_setup.sys, "executable", str(lidar_setup.ENV / "python.exe")):
             self.assertEqual(lidar_setup.main(), 0)
         mamba.assert_not_called()
 
     @patch.object(lidar_setup, "pdal_ready", return_value=False)
-    @patch.object(lidar_setup, "package_command", side_effect=FileNotFoundError("No Micromamba"))
+    @patch.object(lidar_setup, "install_optional_package", side_effect=FileNotFoundError("No Micromamba"))
     def test_missing_mamba_gives_explicit_error(self, mamba, ready):
         with patch.object(lidar_setup.sys, "executable", str(lidar_setup.ENV / "python.exe")):
             with self.assertRaisesRegex(FileNotFoundError, "No Micromamba"):
