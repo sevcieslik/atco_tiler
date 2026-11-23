@@ -29,3 +29,6 @@ Thumbs.db
 
 # Installation diagnostics (local machine/user paths and package output)
 scripts/logs/
+
+# Standalone ATCO Micromamba bootstrap (downloaded binary)
+scripts/.installer/
