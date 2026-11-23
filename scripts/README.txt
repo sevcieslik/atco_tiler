@@ -18,9 +18,7 @@ scripts\INSTALL_LIDAR_SUPPORT.bat  Optional/manual PDAL install for LAZ/zLAS.
 scripts\INSTALL_TRAJECTORY_SUPPORT.bat
                                    Optional/manual PyArrow for TX trajectory data;
                                    GUI checks this automatically when applicable.
-No system Conda is used by the current v1.08 installers. All optional installs
-use scripts\.installer\micromamba.exe and write timestamped logs to scripts\logs:
-install_pdal_*.log, install_pyarrow_*.log, install_runtime_*.log.
+ATCO v1.08 uses pinned Miniforge 26.9.4-2 (Conda with libmamba). On first run,\nATCO_RETILER.bat downloads and installs it under %LOCALAPPDATA%\\ATCO\\miniforge3\nfor the current user, after verifying the official SHA256 checksum. Existing\nworking scripts\\.venv environments do not trigger the download.\nHost Conda is not modified. ATCO_CONDA_BAT may explicitly select a known\ncompatible Conda installation. Windows security restrictions must be respected.\nRuntime installer log: scripts\\logs\\install_runtime_*.log.
 Scripts must remain complete after ZIP extraction. If files disappear or Windows
 returns Access is denied, stop and investigate endpoint/security controls; do
 not disable protection or rename scripts to bypass a policy.
@@ -98,11 +96,8 @@ logs to scripts\\logs\\install_runtime_YYYYMMDD_HHMMSS.log.
 Logs include the computer identity, project/runtime paths, Conda output,
 message timestamps, final exit code and total elapsed seconds.
 They are stored locally and excluded from Git. Send the full log from
-each test computer to compare Micromamba solving and transaction durations.
-The first run downloads standalone Micromamba from the official mamba-org
-GitHub release to scripts\\.installer\\micromamba.exe. This requires
-GitHub/conda-forge access but no system Conda installation or admin rights.
-The system Conda configuration and solver are never modified.
+each test computer to compare Conda/libmamba solver and transaction durations.
+The first run downloads pinned Miniforge 26.9.4-2 from official conda-forge\nreleases, validates its SHA256 and installs it in the user's LOCALAPPDATA.\nThe existing system Conda is not modified.
 
 VALIDATION LOGIC
 ----------------
