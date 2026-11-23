@@ -40,37 +40,29 @@ def pdal_ready():
 
 
 def find_conda():
+    """Use the pinned ATCO-managed Miniforge, never an arbitrary old host Conda."""
     explicit = os.environ.get("ATCO_CONDA_BAT", "").strip().strip('"')
     if explicit:
-        p = Path(explicit)
-        if p.is_file():
-            return p
-        raise FileNotFoundError(f"ATCO_CONDA_BAT does not exist: {p}")
+        path = Path(explicit)
+        if not path.is_file():
+            raise FileNotFoundError(f"ATCO_CONDA_BAT does not exist: {path}")
+        return path
 
-    home = Path.home()
-    local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-    for root in (
-        Path(r"C:\Tools\Miniconda3"),
-        Path(r"C:\Tools\Miniforge3"),
-        home / "miniforge3",
-        home / "miniconda3",
-        local / "miniforge3",
-        local / "miniconda3",
-        Path(r"C:\ProgramData\miniforge3"),
-        Path(r"C:\ProgramData\miniconda3"),
-    ):
-        for part in ("condabin/conda.bat", "Scripts/conda.exe"):
-            candidate = root / part
-            if candidate.is_file():
-                return candidate
-    for exe in ("conda.bat", "conda.exe"):
-        found = shutil.which(exe)
-        if found:
-            return Path(found)
-    raise FileNotFoundError(
-        "Conda was not found. Install Miniconda or set ATCO_CONDA_BAT "
-        "to its conda.bat. The existing ATCO environment is unchanged."
-    )
+    local = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ATCO" / "miniforge3"
+    candidate = local / "condabin" / "conda.bat"
+    if candidate.is_file():
+        return candidate
+    bootstrap = ROOT / "bootstrap_miniforge.ps1"
+    print("ATCO Miniforge not found: first-run Conda bootstrap required.", flush=True)
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-File", str(bootstrap)],
+        check=False)
+    if result.returncode != 0 or not candidate.is_file():
+        raise RuntimeError(
+            "ATCO-managed Miniforge could not be installed. "
+            "Check the installer output and Windows security events."
+        )
+    return candidate
 
 
 def main():
