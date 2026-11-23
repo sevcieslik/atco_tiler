@@ -10,8 +10,8 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ensure_lidar_support import ENV
-from runtime_package_manager import package_command
+from runtime_package_manager import ENV
+from runtime_package_manager import install_optional_package
 
 INDEX = Path(r"W:\APPS\PIT\ATCO\source\trajectories\trajectory_index.parquet")
 
@@ -35,14 +35,7 @@ def main():
         print("TX trajectory support (PyArrow) already available.", flush=True)
         return 0
     print(f"TX Tile Index needs PyArrow: installing into existing {ENV} via ATCO Micromamba", flush=True)
-    cmd = package_command("pyarrow")
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                               stderr=subprocess.STDOUT, text=True,
-                               bufsize=1, errors="replace")
-    for line in process.stdout:
-        print(line.rstrip(), flush=True)
-    if process.wait():
-        raise RuntimeError("PyArrow Micromamba installation failed; see Activity Log.")
+    install_optional_package("pyarrow")
     # The new package may not be visible in the parent import cache.
     import importlib
     importlib.invalidate_caches()
