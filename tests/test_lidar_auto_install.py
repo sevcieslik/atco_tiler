@@ -10,17 +10,17 @@ import ensure_lidar_support as lidar_setup
 
 class PDALSetupTests(unittest.TestCase):
     @patch.object(lidar_setup, "pdal_ready", return_value=True)
-    @patch.object(lidar_setup, "find_conda")
-    def test_installed_pdal_requires_no_conda_or_download(self, conda, ready):
+    @patch.object(lidar_setup, "package_command")
+    def test_installed_pdal_requires_no_mamba_or_download(self, mamba, ready):
         with patch.object(lidar_setup.sys, "executable", str(lidar_setup.ENV / "python.exe")):
             self.assertEqual(lidar_setup.main(), 0)
-        conda.assert_not_called()
+        mamba.assert_not_called()
 
     @patch.object(lidar_setup, "pdal_ready", return_value=False)
-    @patch.object(lidar_setup, "find_conda", side_effect=FileNotFoundError("No Conda"))
-    def test_missing_conda_gives_explicit_error(self, conda, ready):
+    @patch.object(lidar_setup, "package_command", side_effect=FileNotFoundError("No Micromamba"))
+    def test_missing_mamba_gives_explicit_error(self, mamba, ready):
         with patch.object(lidar_setup.sys, "executable", str(lidar_setup.ENV / "python.exe")):
-            with self.assertRaisesRegex(FileNotFoundError, "No Conda"):
+            with self.assertRaisesRegex(FileNotFoundError, "No Micromamba"):
                 lidar_setup.main()
 
 
