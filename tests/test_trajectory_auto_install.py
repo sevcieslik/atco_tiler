@@ -13,14 +13,14 @@ class TrajectorySupportTests(unittest.TestCase):
         with (patch.object(setup.sys, "executable", str(setup.ENV / "python.exe")),
               patch.object(setup.INDEX.__class__, "is_file", return_value=True),
               patch.object(setup, "pyarrow_ready", return_value=True),
-              patch.object(setup, "package_command") as mamba):
+              patch.object(setup, "install_optional_package") as mamba):
             self.assertEqual(setup.main(), 0)
             mamba.assert_not_called()
 
     def test_missing_index_skips_install(self):
         with (patch.object(setup.sys, "executable", str(setup.ENV / "python.exe")),
               patch.object(setup.INDEX.__class__, "is_file", return_value=False),
-              patch.object(setup, "package_command") as mamba):
+              patch.object(setup, "install_optional_package") as mamba):
             self.assertEqual(setup.main(), 0)
             mamba.assert_not_called()
 
@@ -28,7 +28,7 @@ class TrajectorySupportTests(unittest.TestCase):
         with (patch.object(setup.sys, "executable", str(setup.ENV / "python.exe")),
               patch.object(setup.INDEX.__class__, "is_file", return_value=True),
               patch.object(setup, "pyarrow_ready", return_value=False),
-              patch.object(setup, "package_command", side_effect=FileNotFoundError("No Micromamba"))):
+              patch.object(setup, "install_optional_package", side_effect=FileNotFoundError("No Micromamba"))):
             with self.assertRaisesRegex(FileNotFoundError, "No Micromamba"):
                 setup.main()
 
