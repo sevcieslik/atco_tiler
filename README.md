@@ -37,7 +37,7 @@ Do not append `_segments` or `_area` to these directories. Earlier v1.08 UAT fol
 
 ## Optional dependencies
 
-The installer downloads its own standalone **Micromamba** executable to `scripts/.installer/` from the official mamba-org GitHub release if necessary, and creates the project-local Python 3.11 `scripts/.venv`. No host Conda installation or solver configuration is required or altered. This first download requires access to GitHub; conda-forge is used for packages. If LAZ/zLAS needs PDAL or a TX Tile Index needs PyArrow, the application installs that optional dependency using the same ATCO Micromamba. Global Mapper is required for ECW and EzLAS.exe for zLAS. Install diagnostics are saved in `scripts/logs/install_runtime_*.log`.
+On first setup, ATCO installs a **pinned Miniforge 26.9.4-2** distribution from the official conda-forge release under `%LOCALAPPDATA%\\ATCO\\miniforge3`, validating the release SHA256 checksum before execution. This provides a modern Conda with the libmamba solver and does not modify the host Conda, PATH, or registry. A valid existing `scripts/.venv` is kept. PDAL (LAZ/zLAS) and PyArrow (TX trajectory metadata) are installed on demand via that Conda into `scripts/.venv`. Global Mapper is required for ECW and EzLAS.exe for zLAS. Installation diagnostics: `scripts/logs/install_runtime_*.log`.
 
 See `scripts/README.txt`, `scripts/docs/technical_notes.html`, `scripts/docs/faq_troubleshooting_qa.html`, and the in-app **How to Start** page for full usage, troubleshooting and QA details.
 
