@@ -78,8 +78,11 @@ logs to scripts\\logs\\install_runtime_YYYYMMDD_HHMMSS.log.
 Logs include the computer identity, project/runtime paths, Conda output,
 message timestamps, final exit code and total elapsed seconds.
 They are stored locally and excluded from Git. Send the full log from
-each test computer to compare long Conda create/solve/download phases.
-No installer optimisations are part of this diagnostic change.
+each test computer to compare Micromamba solving and transaction durations.
+The first run downloads standalone Micromamba from the official mamba-org
+GitHub release to scripts\\.installer\\micromamba.exe. This requires
+GitHub/conda-forge access but no system Conda installation or admin rights.
+The system Conda configuration and solver are never modified.
 
 VALIDATION LOGIC
 ----------------
