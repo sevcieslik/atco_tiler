@@ -113,7 +113,13 @@ def process(aoi_path: Path, output_root: Path, *, ortho_source=None, cloud_sourc
 
     if make_laz:
         lidar.validate_pdal_available()
-        files = lidar.source_clouds(Path(cloud_source))
+        from cloud_source_selection import select_entity_clouds
+        import sqlite3
+        with sqlite3.connect(str(lidar.DB_PATH)) as con:
+            known_entities = [row[0] for row in con.execute("SELECT entity_id FROM entities")]
+        files, selection_mode = select_entity_clouds(
+            Path(cloud_source), entity, known_entities)
+        print(f"LiDAR source selection for {entity}: {selection_mode}, {len(files)} file(s)", flush=True)
         inventory, point_crs, crs_meta = lidar.cloud_inventory(files, crs, qa)
         chosen = lidar.intersecting_sources(geom, inventory)
         if not chosen:
