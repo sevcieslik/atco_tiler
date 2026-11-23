@@ -14,42 +14,17 @@ if exist "%ENV_DIR%\python.exe" (
   if exist "%ENV_DIR%" goto :fail
 )
 
-rem Discover Conda independently of the system Python version or PATH order.
-rem A known custom installation can be specified as ATCO_CONDA_BAT.
-set "CONDA_BAT="
-if defined ATCO_CONDA_BAT if exist "%ATCO_CONDA_BAT%" set "CONDA_BAT=%ATCO_CONDA_BAT%"
-if not defined CONDA_BAT (
-  for %%P in (
-    "C:\Tools\Miniconda3\condabin\conda.bat"
-    "C:\Tools\Miniconda3\Scripts\conda.exe"
-    "C:\Tools\Miniforge3\condabin\conda.bat"
-    "C:\Tools\Miniforge3\Scripts\conda.exe"
-    "%USERPROFILE%\miniforge3\condabin\conda.bat"
-    "%USERPROFILE%\miniconda3\condabin\conda.bat"
-    "%LOCALAPPDATA%\miniforge3\condabin\conda.bat"
-    "%LOCALAPPDATA%\miniconda3\condabin\conda.bat"
-    "C:\ProgramData\miniforge3\condabin\conda.bat"
-    "C:\ProgramData\miniconda3\condabin\conda.bat"
-  ) do (
-    if not defined CONDA_BAT if exist "%%~P" set "CONDA_BAT=%%~P"
-  )
-)
-if not defined CONDA_BAT (
-  for %%E in (conda.bat conda.exe) do (
-    if not defined CONDA_BAT for /f "delims=" %%P in ('where %%E 2^>nul') do (
-      if not defined CONDA_BAT set "CONDA_BAT=%%P"
-    )
-  )
-)
+rem A valid existing runtime never triggers a Conda download.
+if "%ENV_EXISTS%"=="1" goto :validate_existing
+call :ensure_conda
+if errorlevel 1 goto :fail
 
 if "%ENV_EXISTS%"=="1" goto :validate_existing
-if not defined CONDA_BAT goto :missing_conda
-
 echo.
 echo ATCO runtime: %ENV_DIR%
 echo Conda executable: %CONDA_BAT%
 echo Creating lightweight ATCO imagery runtime (Python 3.11). LiDAR is optional.
-call "%CONDA_BAT%" create --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
+call "%CONDA_BAT%" create --solver=libmamba --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
 if errorlevel 1 goto :fail
 >"config\runtime_env.txt" echo %ENV_DIR%
 goto :validate_final
@@ -63,11 +38,12 @@ if errorlevel 1 goto :repair
 if not errorlevel 1 goto :ready
 
 :repair
-if not defined CONDA_BAT goto :missing_conda
+call :ensure_conda
+if errorlevel 1 goto :fail
 echo.
 echo Repairing ATCO runtime at %ENV_DIR% ...
 echo Using Conda: %CONDA_BAT%
-call "%CONDA_BAT%" install --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
+call "%CONDA_BAT%" install --solver=libmamba --yes --prefix "%ENV_DIR%" --override-channels --strict-channel-priority -c conda-forge python=3.11 geopandas rasterio
 if errorlevel 1 goto :fail
 
 :validate_final
@@ -86,12 +62,30 @@ echo.
 rem No pause: log wrapper records exit status and can be launched unattended.
 exit /b 0
 
-:missing_conda
-echo.
-echo ERROR: ATCO needs Conda to create or repair its GIS runtime.
-echo Looked for C:\Tools\Miniconda3 and other common Conda locations.
-echo If Conda is elsewhere, set ATCO_CONDA_BAT to its full path.
-goto :fail
+:ensure_conda
+rem Explicit administrator-approved Conda override is supported.
+if defined ATCO_CONDA_BAT (
+  if not exist "%ATCO_CONDA_BAT%" (
+    echo ERROR: ATCO_CONDA_BAT does not exist: %ATCO_CONDA_BAT%
+    exit /b 1
+  )
+  set "CONDA_BAT=%ATCO_CONDA_BAT%"
+  echo Using explicitly selected Conda: %CONDA_BAT%
+  exit /b 0
+)
+rem First-run bootstrap uses pinned Miniforge in the user profile, not system Conda.
+powershell.exe -NoProfile -File "%~dp0bootstrap_miniforge.ps1"
+if errorlevel 1 (
+  echo ERROR: ATCO-managed Miniforge setup failed. Existing runtime preserved.
+  exit /b 1
+)
+if not exist "config\conda_path.txt" exit /b 1
+set /p "CONDA_BAT="<"config\conda_path.txt"
+if not exist "%CONDA_BAT%" (
+  echo ERROR: ATCO-managed Conda executable missing: %CONDA_BAT%
+  exit /b 1
+)
+exit /b 0
 
 :fail
 echo.
