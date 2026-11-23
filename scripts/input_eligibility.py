@@ -87,11 +87,16 @@ def _image_footprints(folder, crs):
     return unary_union(geoms), len(rasters)
 
 
-def _cloud_footprints(folder, crs, pdal_exe):
+def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=()):
+    from modules.cloud_source_selection import select_entity_clouds
     if not folder or not Path(folder).is_dir():
         raise FileNotFoundError("Input/point_cloud folder is missing")
-    files = sorted(p for p in Path(folder).rglob("*")
-                   if p.suffix.lower() in (".las", ".laz"))
+    if entity:
+        files, _selection_mode = select_entity_clouds(
+            Path(folder), entity, registered_entities)
+    else:
+        files = sorted(p for p in Path(folder).rglob("*")
+                       if p.is_file() and p.suffix.lower() in (".las", ".laz"))
     if not files:
         raise ValueError("No LAS/LAZ files under Input/point_cloud")
     if not pdal_exe:
@@ -172,9 +177,16 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
                 excluded.append((row["entity"], "insufficient imagery footprint coverage"))
                 continue
         if needs_cloud:
-            key = ("cloud", row["crs"].to_wkt())
+            key = ("cloud", row["crs"].to_wkt(), row["entity"])
             if key not in cache:
-                cache[key] = _cloud_footprints(mapped.get("point_cloud"), row["crs"], pdal_exe)
+                try:
+                    cache[key] = _cloud_footprints(
+                        mapped.get("point_cloud"), row["crs"], pdal_exe,
+                        entity=row["entity"],
+                        registered_entities=[r["entity"] for r in registered])
+                except ValueError as exc:
+                    excluded.append((row["entity"], str(exc)))
+                    continue
             if _coverage(geom, cache[key][0]) < MIN_AREA_COVERAGE:
                 excluded.append((row["entity"], "insufficient LiDAR footprint coverage"))
                 continue
