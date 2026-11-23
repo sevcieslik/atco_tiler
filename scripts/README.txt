@@ -5,6 +5,26 @@ STATUS: Development branch, Windows UAT required. Stable main remains v1.07.
 Launch: ATCO_RETILER.bat (project-local Python environment: scripts\.venv).
 Questions, bugs, improvements: pit@nmgroup.com
 
+INSTALLERS (WINDOWS)
+--------------------
+Normal operators start ATCO_RETILER.bat at the project root; it launches the
+base runtime installer automatically if scripts\.venv is missing.
+
+scripts\INSTALL_RUNTIME.bat        Manual setup or repair of base Python runtime.
+scripts\INSTALL_RUNTIME_CORE.bat   Internal implementation called by the runtime
+                                   logging wrapper; DO NOT launch directly.
+scripts\INSTALL_LIDAR_SUPPORT.bat  Optional/manual PDAL install for LAZ/zLAS.
+                                   GUI installs PDAL automatically when needed.
+scripts\INSTALL_TRAJECTORY_SUPPORT.bat
+                                   Optional/manual PyArrow for TX trajectory data;
+                                   GUI checks this automatically when applicable.
+No system Conda is used by the current v1.08 installers. All optional installs
+use scripts\.installer\micromamba.exe and write timestamped logs to scripts\logs:
+install_pdal_*.log, install_pyarrow_*.log, install_runtime_*.log.
+Scripts must remain complete after ZIP extraction. If files disappear or Windows
+returns Access is denied, stop and investigate endpoint/security controls; do
+not disable protection or rename scripts to bypass a policy.
+
 OPERATOR WORKFLOW
 -----------------
 1. Populate the local project input folders:
