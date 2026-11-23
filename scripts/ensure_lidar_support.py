@@ -10,6 +10,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from runtime_package_manager import package_command
 
 ROOT = Path(__file__).resolve().parent
 ENV = ROOT / ".venv"
@@ -39,39 +40,6 @@ def pdal_ready():
         return False
 
 
-def find_conda():
-    explicit = os.environ.get("ATCO_CONDA_BAT", "").strip().strip('"')
-    if explicit:
-        p = Path(explicit)
-        if p.is_file():
-            return p
-        raise FileNotFoundError(f"ATCO_CONDA_BAT does not exist: {p}")
-
-    home = Path.home()
-    local = Path(os.environ.get("LOCALAPPDATA", home / "AppData" / "Local"))
-    for root in (
-        Path(r"C:\Tools\Miniconda3"),
-        Path(r"C:\Tools\Miniforge3"),
-        home / "miniforge3",
-        home / "miniconda3",
-        local / "miniforge3",
-        local / "miniconda3",
-        Path(r"C:\ProgramData\miniforge3"),
-        Path(r"C:\ProgramData\miniconda3"),
-    ):
-        for part in ("condabin/conda.bat", "Scripts/conda.exe"):
-            candidate = root / part
-            if candidate.is_file():
-                return candidate
-    for exe in ("conda.bat", "conda.exe"):
-        found = shutil.which(exe)
-        if found:
-            return Path(found)
-    raise FileNotFoundError(
-        "Conda was not found. Install Miniconda or set ATCO_CONDA_BAT "
-        "to its conda.bat. The existing ATCO environment is unchanged."
-    )
-
 
 def main():
     if Path(sys.executable).resolve() != (ENV / "python.exe").resolve():
@@ -80,18 +48,8 @@ def main():
         print("PDAL already available: no download required.", flush=True)
         return 0
 
-    conda = find_conda()
-    print(f"PDAL missing: adding it to existing runtime {ENV}", flush=True)
-    print(f"Using Conda: {conda}", flush=True)
-    install = [
-        str(conda), "install", "--yes", "--prefix", str(ENV),
-        "--override-channels", "--strict-channel-priority",
-        "-c", "conda-forge", "pdal",
-    ]
-    if conda.suffix.lower() == ".bat":
-        if os.name != "nt":
-            raise RuntimeError("conda.bat requires Windows")
-        install = ["cmd.exe", "/d", "/c", *install]
+    print(f"PDAL missing: adding it to existing runtime {ENV} via ATCO Micromamba", flush=True)
+    install = package_command("pdal")
     proc = subprocess.Popen(install, stdout=subprocess.PIPE,
                             stderr=subprocess.STDOUT, text=True,
                             bufsize=1, errors="replace")
@@ -100,11 +58,11 @@ def main():
     result = proc.wait()
     if result != 0:
         raise RuntimeError(
-            f"Conda PDAL installation failed (exit {result}); "
+            f"ATCO Micromamba PDAL installation failed (exit {result}); "
             "check the Activity Log. No full environment rebuild was requested."
         )
     if not pdal_ready():
-        raise RuntimeError("Conda completed, but PDAL cannot be started.")
+        raise RuntimeError("Micromamba completed, but PDAL cannot be started.")
     print("PDAL installed and validated. Continuing selected build.", flush=True)
     return 0
 
