@@ -43,6 +43,26 @@ OPERATOR WORKFLOW
    pixels/points exist everywhere inside those files. NoData gaps and sparse
    LiDAR must still be checked in processing QA.
 
+LIDAR SOURCE OWNERSHIP (MULTI-ENTITY)
+------------------------------------
+When input/point_cloud contains multiple circuit/area datasets, place each
+entity's LAS/LAZ in a directory named exactly like its registered entity ID
+(e.g. input/point_cloud/9L66/) OR include that ID as a distinct token in each
+LAS/LAZ filename (e.g. 9L66_0018.laz). References are matched against
+registered entity IDs; 9L66 does not match 9L660.
+Sources attributed to another entity are never merged into this entity's
+output. Validation applies the identical restriction before footprint checks.
+If NO LAS/LAZ references any registered entity, the entire source collection
+is treated as shared across all AOIs and spatial bounds decide which files
+are cropped. If the folder mixes identified and unlabelled sources, the
+unlabelled files are intentionally not combined with identified files to
+prevent double counting. If the target has no identified files in a mixed
+collection, validation excludes it and processing reports a clear error.
+Sort source files into entity folders to resolve this safely.
+This prevents cross-circuit merging; it does NOT deduplicate identical
+points already present within a single source or overlapping same-circuit
+source LAS/LAZ files.
+
 VALIDATION RECOVERY (v1.08)
 ----------------------------
 If LAZ or zLAS is selected but input/point_cloud contains no LAS/LAZ,
