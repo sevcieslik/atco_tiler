@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+from modules.circuit_identity import resolve_circuit_id
 from __future__ import annotations
 
 import argparse
@@ -101,12 +102,8 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
         raise ValueError(f'No valid AOI polygon geometry: {selected_polygon}')
 
     with db_connect_readonly(DB_PATH) as con:
-        entity = con.execute(
-            "SELECT current_revision FROM entities WHERE entity_kind='circuit' AND entity_id=?",
-            (circuit,),
-        ).fetchone()
-        if not entity:
-            raise ValueError(f'{circuit} is not registered in the central AOI database')
+        canonical_circuit, current_revision_id = resolve_circuit_id(con, circuit)
+        circuit = canonical_circuit
         rows = con.execute(
             """SELECT id, revision_num, revision_code, source_version, crs_wkt, polygon_wkb, source_folder
                FROM revisions WHERE entity_kind='circuit' AND entity_id=? ORDER BY revision_num""",
@@ -129,7 +126,6 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
         if diff <= 0.05:
             matches.append((row, diff, target_crs, central_geom))
 
-    current_revision_id = int(entity[0])
     if not matches:
         current = next((r for r in rows if int(r[0]) == current_revision_id), rows[-1])
         raise RuntimeError(
@@ -145,6 +141,7 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
             'Use the current production AOI.'
         )
     return {
+        'entity_id': circuit,
         'revision_id': row[0],
         'revision_num': int(row[1]),
         'revision_code': row[2],
@@ -837,6 +834,7 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
     circuit = circuit_from_polygon(polygon)
     print(f'Circuit: {circuit}', flush=True)
     aoi = load_aoi_revision(circuit, polygon)
+    circuit = aoi['entity_id']
     print(f'AOI: {aoi["revision_code"]} confirmed against central registry', flush=True)
     segment_shp, seg = load_segments(circuit, aoi['revision_code'])
     if not CRS.from_user_input(seg.crs).equals(aoi['crs']):
@@ -972,6 +970,7 @@ def interactive():
         polygon = find_polygon_shp(Path(aoi_input))
         circuit = circuit_from_polygon(polygon)
         aoi = load_aoi_revision(circuit, polygon)
+    circuit = aoi['entity_id']
         shp, seg = load_segments(circuit, aoi['revision_code'])
         print('Index-only mode needs source raster grid to align footprint edges exactly.')
         source = input('Source orthophoto TIFF folder: ').strip().strip('"')
