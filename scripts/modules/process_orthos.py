@@ -971,7 +971,7 @@ def interactive():
         polygon = find_polygon_shp(Path(aoi_input))
         circuit = circuit_from_polygon(polygon)
         aoi = load_aoi_revision(circuit, polygon)
-    circuit = aoi['entity_id']
+        circuit = aoi['entity_id']
         shp, seg = load_segments(circuit, aoi['revision_code'])
         print('Index-only mode needs source raster grid to align footprint edges exactly.')
         source = input('Source orthophoto TIFF folder: ').strip().strip('"')
