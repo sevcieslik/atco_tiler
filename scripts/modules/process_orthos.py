@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-from modules.circuit_identity import resolve_circuit_id
+from circuit_identity import resolve_circuit_id
 
 import argparse
 import csv
