@@ -967,6 +967,7 @@ class RetilerApp(tk.Tk):
                 if i < len(self.aoi_options)]
 
     def _update_aoi_context(self):
+        self.context_error = None
         self.context = None
         self.blocks = []
         self.cloud_blocks = []
@@ -1010,7 +1011,8 @@ class RetilerApp(tk.Tk):
                          + ", ".join(f"{r['entity']} ({r['kind']})"
                                      for r in self.entity_records[:5]))
             except Exception as exc:
-                self.context_label.configure(text="AOI validation error")
+                self.context_error = str(exc)
+                self.context_label.configure(text=f"AOI validation error: {exc}")
                 self.log(f"AOI preflight: {exc}", "WARN")
                 self.context = None
                 self.blocks = []
@@ -1020,7 +1022,7 @@ class RetilerApp(tk.Tk):
             allow_index = bool(self.has_segmented_entities())
             self.product_checks["Tile Index"].configure(
                 state="normal" if allow_index else "disabled")
-            if not allow_index:
+            if not allow_index and self.context_error is None:
                 # An area produces no tile index; its disabled checkbox
                 # should not misleadingly remain checked.
                 self.product_vars["Tile Index"].set(False)
@@ -1124,10 +1126,16 @@ class RetilerApp(tk.Tk):
                      f"{len(excluded)} excluded. Footprint coverage is not pixel QA.", "INFO")
             for name, reason in excluded:
                 self.log(f"Excluded {name}: {reason}", "WARN")
-            messagebox.showinfo(APP_NAME,
-                f"Input validated. {len(eligible)} eligible entities found.\n"
-                "Choose the entities to process.\n\n"
-                "Coverage uses spatial footprints; output QA still applies.")
+            if self.context is None:
+                messagebox.showerror(APP_NAME,
+                    "Footprint coverage passed, but processing preflight failed.\n\n"
+                    f"{self.context_error or 'No processing context available.'}\n\n"
+                    "Check Activity Log or select another eligible entity.")
+            else:
+                messagebox.showinfo(APP_NAME,
+                    f"Input validated. {len(eligible)} eligible entities found.\n"
+                    "Choose the entities to process.\n\n"
+                    "Coverage uses spatial footprints; output QA still applies.")
         else:
             self._invalidate_input_validation()
             self.log(f"VALIDATION: 0 eligible entities; {len(excluded)} exclusions.", "WARN")
