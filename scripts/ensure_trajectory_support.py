@@ -1,4 +1,4 @@
-"""Optional one-time PyArrow install for TX Tile Index trajectory attribution.
+"""Optional one-time PyArrow install for TX/DX Tile Index trajectory attribution.
 
 Runs in a child process before any selected products are processed. The base
 ATCO runtime stays lean and no existing LiDAR/imagery products are rebuilt.
@@ -27,14 +27,14 @@ def main():
     if Path(sys.executable).resolve() != (ENV / "python.exe").resolve():
         raise RuntimeError("PyArrow installer must run using scripts\\.venv\\python.exe")
     if not INDEX.is_file():
-        print("TX trajectory index is absent: skipping optional PyArrow installation. "
+        print("TX/DX trajectory index is absent: skipping optional PyArrow installation. "
               "Flight fields will remain blank until the index is published.", flush=True)
         return 0
     if pyarrow_ready():
-        print("TX trajectory support (PyArrow) already available.", flush=True)
+        print("TX/DX trajectory support (PyArrow) already available.", flush=True)
         return 0
     conda = find_conda()
-    print(f"TX Tile Index needs PyArrow: installing into existing {ENV}", flush=True)
+    print(f"TX/DX Tile Index needs PyArrow: installing into existing {ENV}", flush=True)
     cmd = [
         str(conda), "install", "--yes", "--prefix", str(ENV),
         "--override-channels", "--strict-channel-priority",
@@ -56,7 +56,7 @@ def main():
     importlib.invalidate_caches()
     if not pyarrow_ready():
         raise RuntimeError("Conda finished, but PyArrow cannot be imported.")
-    print("PyArrow installed and validated. Continuing TX Tile Index.", flush=True)
+    print("PyArrow installed and validated. Continuing TX/DX Tile Index.", flush=True)
     return 0
 
 
