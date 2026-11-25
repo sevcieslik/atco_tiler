@@ -1,4 +1,14 @@
-# ATCO Retiler – Historical release notes
+# ATCO Retiler – Release notes
+
+## v1.08.04 (Windows UAT)
+
+- Windowed segmented TIFF mosaic and read-back QA (1024 × 1024 pixels); 128 MiB GDAL cache in the orthophoto CLI.
+- DX Tile Index: ten agreed fields; integer DDDYY for earliest matched acquisition date; flightid matches Flightline; blank WONum.
+- Shared TX/DX temporal attribution and optional PDAL/PyArrow setup for index-only runs. Spatial confirmation is not implemented.
+- Fix ortho indentation, sibling imports and AOI preflight error reporting.
+- No change to output tile naming version (v1), AOI registry schema, or published segment geometries.
+
+## Historical release notes
 
 These notes describe older versions. Refer to README.md and scripts/README.txt for the current v1.08 operator workflow.
 
