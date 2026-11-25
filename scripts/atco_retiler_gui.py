@@ -1291,6 +1291,32 @@ class RetilerApp(tk.Tk):
         if needs_pc and not self.mapped.get("point_cloud"):
             messagebox.showerror(APP_NAME, "Point Cloud input is missing.")
             return
+        # Index-only runs require the current delivery LAZ tiles.
+        if "Tile Index" in selected and not needs_pc:
+            incomplete = []
+            for record in self.entity_records:
+                if not record["has_segments"]:
+                    continue
+                base = core.output_base(self.output_root, record["entity"])
+                laz_dir = base / product_folder("LAZ")
+                missing = sum(
+                    not self._is_valid_file(laz_dir / f"{name}.laz")
+                    for name in record["cloud"]
+                )
+                if missing:
+                    incomplete.append(
+                        f"{record['entity']}: {missing}/{len(record['cloud'])} LAZ missing or empty")
+            if incomplete:
+                details = "\n".join(incomplete)
+                messagebox.showwarning(
+                    APP_NAME,
+                    "Tile Index requires complete LAZ output for the selected entities.\n\n"
+                    f"{details}\n\n"
+                    "Generate the missing LAZ files first, or select LAZ + Tile Index together."
+                )
+                self.log(f"Tile Index blocked: {details}", "WARN")
+                return
+
         # Missing PDAL is installed noninteractively in the worker before any
         # TIFF/ECW work begins. Do not block the GUI or pre-download for imagery.
         if "zLAS" in selected and not EZLAS.is_file():
