@@ -616,7 +616,28 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     zone = utm_zone(seg.crs)
     client_name = client_entity_name(circuit)
 
+    # Do not publish an apparently complete client index without its LAZ inputs.
+    # This also protects CLI callers and combined LAZ + Tile Index runs.
+    laz_dir = Path(laz_dir) if laz_dir is not None else base / product_folder('LAZ')
+    missing_laz = []
+    for name in seg['PointCloudName']:
+        path = laz_dir / f'{name}.laz'
+        if not path.is_file() or path.stat().st_size == 0:
+            missing_laz.append(path.name)
+    if missing_laz:
+        examples = ', '.join(missing_laz[:5])
+        raise RuntimeError(
+            f'Tile Index blocked for {circuit}: {len(missing_laz)}/{len(seg)} '
+            f'expected LAZ tiles are missing or empty in {laz_dir}. '
+            f'Examples: {examples}. Generate the missing LAZ tiles first, '
+            'then regenerate Tile Index, or select LAZ + Tile Index together.'
+        )
     trajectory_index = load_trajectory_index()
+    if trajectory_index is None or trajectory_index.empty:
+        raise RuntimeError(
+            f'Tile Index blocked for {circuit}: the central trajectory index is missing or empty. '
+            'Publish trajectory_index.parquet before generating the client Tile Index.'
+        )
     tx = is_tx(circuit)
     records = []
     for _, row in seg.iterrows():
@@ -654,6 +675,11 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
         # Nullable 32-bit integer, including tiles without flight metadata.
         frame['flline_id'] = pd.array(frame['flline_id'], dtype='Int32')
     missing = int((frame['Flightline'] == '').sum())
+    if missing == len(frame):
+        raise RuntimeError(
+            f'Tile Index blocked for {circuit}: no flight metadata matched any of the '
+            f'{len(frame)} LAZ tiles. Check PDAL, LAZ GPS Time and the trajectory index.'
+        )
     if missing:
         print(f'WARNING: Tile Index {circuit}: {missing}/{len(frame)} tiles have no matched flight metadata.', flush=True)
     print('Tile Index attribution uses GPS range candidates; overlapping flights may require review.', flush=True)
