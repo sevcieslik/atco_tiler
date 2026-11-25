@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ATCO Retiler v1.08-dev - Technical Notes</title>
+<title>ATCO Retiler v1.08.04 - Technical Notes</title>
 <style>
 :root{--nav:#18232d;--ink:#17212b;--muted:#64717c;--line:#d5dde3;--green:#2e9638;--soft:#f5f7f9;--blue:#1769d2;--amber:#996500}
 *{box-sizing:border-box} body{margin:0;font-family:Segoe UI,Arial,sans-serif;color:var(--ink);background:#eef2f5;line-height:1.55}
@@ -15,12 +15,12 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 </style>
 </head>
 <body>
-<header><h1>ATCO Retiler v1.08-dev - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
+<header><h1>ATCO Retiler v1.08.04 - Technical Notes</h1><p>Production retiling workflow for NMCP26054 ATCO 2026</p></header>
 <main>
 <div class="card toc"><strong>Contents:</strong> <a href="#workflow">Input validation</a><a href="#sources">Authoritative sources</a><a href="#naming">Naming</a><a href="#tiff">TIFF</a><a href="#ecw">ECW</a><a href="#laz">LAZ</a><a href="#zlas">zLAS</a><a href="#tiles">Tile Index</a><a href="#trajectory">Trajectory attribution</a><a href="#qa">QA outputs</a></div>
 
 <section class="card" id="workflow"><h2>1. Input-first validation and processing</h2>
-<p>v1.08-dev does not display a catalogue of all W-drive entities. An operator first supplies a local <code>input</code> folder containing <code>aoi</code>, <code>orthos</code> and <code>point_cloud</code> as needed by the selected products. The central registry is only a read-only geometry/revision reference.</p>
+<p>v1.08.04 does not display a catalogue of all W-drive entities. An operator first supplies a local <code>input</code> folder containing <code>aoi</code>, <code>orthos</code> and <code>point_cloud</code> as needed by the selected products. The central registry is only a read-only geometry/revision reference.</p>
 <table><tr><th>Stage</th><th>Behaviour and guardrail</th></tr>
 <tr><td>Map local input</td><td>The three AOI / Orthos / Point Cloud indicators start <strong>grey</strong> even if folders exist. Folder detection alone does not count as validation.</td></tr>
 <tr><td>Select products</td><td>TIFF/ECW need four-band RGBI orthos; LAZ/zLAS need LAS/LAZ point clouds. ECW selects TIFF and zLAS selects LAZ. Unselected source types remain optional.</td></tr>
@@ -120,12 +120,14 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <p class="small">When imported to the final File GDB, ArcGIS will create GDB-managed fields such as OBJECTID, Shape and geometry length/area fields.</p>
 </section>
 
-<section class="card" id="trajectory"><h2>8. TX trajectory attribution</h2>
+<section class="card" id="trajectory"><h2>8. TX/DX trajectory attribution</h2>
 <p>The central trajectory source is built from the current/highest available processed trajectory version for each flight. The index stores flight date, flightline code and adjusted GPS-time range.</p>
-<p>For each TX final LAZ, Retiler reads the tile GPS-time range and finds overlapping SBET/trajectory records. Matching dates populate <code>fldate</code>; matching codes populate <code>Flightline</code>. Multiple values are retained as comma-separated values.</p>
-<div class="warn">Blank TX flight attribution means no reliable GPS-time match was found. Do not invent a value; review the trajectory index and LAZ GPS-time metadata.</div>
+<p>For each TX or DX final LAZ, Retiler reads the tile GPS-time range and finds overlapping SBET/trajectory records. Matching dates populate <code>fldate</code>; matching codes populate <code>Flightline</code>. Multiple values are retained as comma-separated values.</p>
+<div class="warn">Blank flight attribution means no GPS-time candidate was found. Time overlap is not proof of spatial attribution. Do not invent a value; review the trajectory index and LAZ GPS-time metadata.</div>
 </section>
 
+<p>DX Tile Index fields: BlockNum, PRJ_NAME, YEAR, ZONE, NAME, flline_id (Long, earliest matched DDDYY), flightid (same as Flightline), WONum (blank), fldate, Flightline. Set final GDB field aliases to their field names. TX field schema is unchanged.</p>
+<p>Segmented TIFF export and read-back QA use 1024 × 1024 pixel windows in v1.08.04.</p>
 <section class="card" id="qa"><h2>9. QA outputs and reruns</h2>
 <table><tr><th>QA area</th><th>Typical outputs</th></tr>
 <tr><td>QA\Imagery</td><td>Processing footprint overlap report, Global Mapper scripts/logs, 3-band RGB-white intermediates and imagery processing report.</td></tr>
@@ -135,5 +137,5 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <p><strong>Process</strong> overwrites selected existing products after confirmation. <strong>Process Missing</strong> fills only missing/invalid products where possible. QA should be reviewed before assuming a rerun is required. Validation source badges do not replace imagery/LiDAR QA.</p>
 </section>
 
-<p class="small">ATCO Retiler v1.08-dev · Bugs, improvements and issues: pit@nmgroup.com</p>
+<p class="small">ATCO Retiler v1.08.04 · Bugs, improvements and issues: pit@nmgroup.com</p>
 </main></body></html>
