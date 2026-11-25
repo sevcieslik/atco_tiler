@@ -28,7 +28,7 @@ import atco_processor as core
 from atco_delivery import product_folder, is_tx
 
 APP_NAME = "ATCO Retiler"
-APP_VERSION = "1.08-dev"
+APP_VERSION = "1.08.04"
 
 
 def current_commit():
