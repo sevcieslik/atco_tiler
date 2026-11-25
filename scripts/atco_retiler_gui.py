@@ -1353,9 +1353,14 @@ class RetilerApp(tk.Tk):
             env = os.environ.copy()
             env["ATCO_PARALLEL_WORKERS"] = str(workers)
             overwrite = [] if rerun else ["--overwrite"]
-            if any(product in selected for product in ("LAZ", "zLAS")):
+            index_needs_pdal = "Tile Index" in selected and any(
+                record["has_segments"] and
+                (Path(output_root) / record["entity"] / product_folder("LAZ")).is_dir() and
+                any((Path(output_root) / record["entity"] / product_folder("LAZ")).glob("*.laz"))
+                for record in records)
+            if index_needs_pdal or any(product in selected for product in ("LAZ", "zLAS")):
                 self.log_queue.put(("LINE",
-                    "Checking optional PDAL support for LAZ/zLAS..."))
+                    "Checking optional PDAL support for LAZ/zLAS or Tile Index attribution..."))
                 rc = self._run_stream(
                     [sys.executable, str(TOOL_ROOT / "ensure_lidar_support.py")],
                     env=env)
@@ -1366,11 +1371,9 @@ class RetilerApp(tk.Tk):
                     self.log_queue.put(("STOP", "Processing stopped during PDAL setup"))
                     return
             if "Tile Index" in selected and any(
-                    record["has_segments"] and
-                    is_tx(record["entity"])
-                    for record in records):
+                    record["has_segments"] for record in records):
                 self.log_queue.put(("LINE",
-                    "Checking optional TX trajectory support for Tile Index..."))
+                    "Checking optional trajectory support for TX/DX Tile Index..."))
                 rc = self._run_stream(
                     [sys.executable, str(TOOL_ROOT / "ensure_trajectory_support.py")],
                     env=env)
