@@ -1,6 +1,13 @@
-# ATCO Retiler v1.08-dev
+# ATCO Retiler v1.08.04
 
 ATCO delivery processor for classified LAS/LAZ and four-band RGB+NIR GeoTIFF imagery. The development branch is undergoing Windows UAT; **main remains the stable v1.07 release**.
+
+## Changes in 1.08.04
+
+- Segmented TIFF mosaicking and pixel read-back QA use 1024 × 1024 windows; the orthophoto CLI caps the GDAL cache at 128 MiB. RGBI, resolution and NoData=255 rules are unchanged.
+- DX Tile Index fields: BlockNum, PRJ_NAME, YEAR, ZONE, NAME, flline_id, flightid, WONum, fldate, Flightline. flline_id is the earliest matched acquisition date as a DDDYY integer; flightid equals Flightline; WONum is blank.
+- TX/DX flight metadata uses GPS-time range candidates from existing final LAZ. Overlapping flights may require review. Field aliases should equal field names during final GDB assembly.
+- Fixed Python module imports, indentation and misleading AOI preflight success messages.
 
 ## Operator workflow
 
@@ -37,7 +44,7 @@ Do not append `_segments` or `_area` to these directories. Earlier v1.08 UAT fol
 
 ## Optional dependencies
 
-On first setup, ATCO installs a **pinned Miniforge 26.9.4-2** distribution from the official conda-forge release under `%LOCALAPPDATA%\\ATCO\\miniforge3`, validating the release SHA256 checksum before execution. This provides a modern Conda with the libmamba solver and does not modify the host Conda, PATH, or registry. A valid existing `scripts/.venv` is kept. PDAL (LAZ/zLAS) and PyArrow (TX trajectory metadata) are installed on demand via that Conda into `scripts/.venv`. Global Mapper is required for ECW and EzLAS.exe for zLAS. Installation diagnostics: `scripts/logs/install_runtime_*.log`.
+On first setup, ATCO installs a **pinned Miniforge 26.9.4-2** distribution from the official conda-forge release under `%LOCALAPPDATA%\\ATCO\\miniforge3`, validating the release SHA256 checksum before execution. This provides a modern Conda with the libmamba solver and does not modify the host Conda, PATH, or registry. A valid existing `scripts/.venv` is kept. PDAL (LAZ/zLAS) and PyArrow (TX/DX trajectory metadata) are installed on demand via that Conda into `scripts/.venv`. Global Mapper is required for ECW and EzLAS.exe for zLAS. Installation diagnostics: `scripts/logs/install_runtime_*.log`.
 
 See `scripts/README.txt`, `scripts/docs/technical_notes.html`, `scripts/docs/faq_troubleshooting_qa.html`, and the in-app **How to Start** page for full usage, troubleshooting and QA details.
 
