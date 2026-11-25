@@ -547,13 +547,13 @@ def gps_time_range(laz_path: Path):
 def load_trajectory_index():
     path = TRAJECTORY_ROOT / 'trajectory_index.parquet'
     if not path.is_file():
-        print('NOTE: TX trajectory index missing; fldate/Flightline will be blank.', flush=True)
+        print('NOTE: Trajectory index missing; Tile Index flight attributes will be blank.', flush=True)
         return None
     try:
         import pyarrow  # noqa: F401 - optional, not part of the base GIS runtime
     except ImportError as exc:
         raise RuntimeError(
-            'TX trajectory attribution needs optional PyArrow. Run '
+            'Tile Index trajectory attribution needs optional PyArrow. Run '
             'INSTALL_TRAJECTORY_SUPPORT.bat and retry. '
             'Without it the Tile Index would have missing flight metadata.'
         ) from exc
@@ -569,28 +569,39 @@ def load_trajectory_index():
 
 
 def trajectory_attributes(laz_path: Path, trajectory_index):
-    """Best-effort TX tile attribution from final LAZ GPS time against SBET index."""
+    """Best-effort attribution shared by TX and DX using final LAZ GPS range.
+
+    Return paired date/flightline lists and the earliest acquisition DDDYY.
+    Temporal overlap alone does not prove the aircraft supplied points.
+    """
     if trajectory_index is None:
-        return '', ''
+        return '', '', None
     rng = gps_time_range(laz_path)
     if not rng:
-        return '', ''
+        return '', '', None
     lo, hi = rng
+    if not (float('-inf') < lo <= hi < float('inf')):
+        return '', '', None
     df = trajectory_index
-    hit = df[(df['las_adjusted_gps_end'] >= lo) & (df['las_adjusted_gps_start'] <= hi)].copy()
-    if hit.empty:
-        return '', ''
-    dates = []
-    lines = []
-    for v in hit['date_from_folder'].tolist():
-        v = str(v).strip()
-        if v and v.lower() != 'nan' and v not in dates:
-            dates.append(v)
-    for v in hit['flightline_code'].tolist():
-        v = str(v).strip()
-        if v and v.lower() != 'nan' and v not in lines:
-            lines.append(v)
-    return ', '.join(dates), ', '.join(lines)
+    hit = df[(df['las_adjusted_gps_end'] >= lo) & (df['las_adjusted_gps_start'] <= hi)]
+    pairs = set()
+    for day, line in zip(hit['date_from_folder'], hit['flightline_code']):
+        if pd.isna(day) or pd.isna(line):
+            continue
+        day = pd.to_datetime(day, errors='coerce')
+        line = str(line).strip()
+        if pd.isna(day) or not line:
+            continue
+        pairs.add((day.date(), line))
+    ordered = sorted(pairs)
+    if not ordered:
+        return '', '', None
+    dates = ', '.join(day.isoformat() for day, _ in ordered)
+    lines = ', '.join(line for _, line in ordered)
+    if any(len(value.encode('utf-8')) > 254 for value in (dates, lines)):
+        raise ValueError(f'Tile Index flight attributes exceed SHP text limit: {laz_path}')
+    julian = int(ordered[0][0].strftime('%j%y'))
+    return dates, lines, julian
 
 
 def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz_dir: Path | None = None):
@@ -605,16 +616,16 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     zone = utm_zone(seg.crs)
     client_name = client_entity_name(circuit)
 
-    if is_tx(circuit):
-        trajectory_index = load_trajectory_index()
-        records = []
-        for _, row in seg.iterrows():
-            fldate = ''
-            flightline = ''
-            if laz_dir is not None:
-                laz_path = laz_dir / f'{row.PointCloudName}.laz'
-                fldate, flightline = trajectory_attributes(laz_path, trajectory_index)
-            records.append({
+    trajectory_index = load_trajectory_index()
+    tx = is_tx(circuit)
+    records = []
+    for _, row in seg.iterrows():
+        fldate, flightline, julian = '', '', None
+        if laz_dir is not None and trajectory_index is not None:
+            laz_path = laz_dir / f'{row.PointCloudName}.laz'
+            fldate, flightline, julian = trajectory_attributes(laz_path, trajectory_index)
+        if tx:
+            rec = {
                 'BlockNum': str(row.TileSeq),
                 'ZONE': str(zone),
                 'YEAR': str(YEAR),
@@ -622,16 +633,30 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
                 'NAME': str(row.PointCloudName),
                 'fldate': fldate,
                 'Flightline': flightline,
-                'geometry': row.geometry,
-            })
-        frame = gpd.GeoDataFrame(records, geometry='geometry', crs=seg.crs)
-    else:
-        frame = gpd.GeoDataFrame({
-            'PRJ_NAME': [client_name] * len(seg),
-            'YEAR': [str(YEAR)] * len(seg),
-            'ZONE': [str(zone)] * len(seg),
-            'geometry': list(seg.geometry),
-        }, geometry='geometry', crs=seg.crs)
+            }
+        else:
+            rec = {
+                'BlockNum': str(row.TileSeq),
+                'PRJ_NAME': client_name,
+                'YEAR': str(YEAR),
+                'ZONE': str(zone),
+                'NAME': str(row.PointCloudName),
+                'flline_id': julian,
+                'flightid': flightline,
+                'WONum': '',
+                'fldate': fldate,
+                'Flightline': flightline,
+            }
+        rec['geometry'] = row.geometry
+        records.append(rec)
+    frame = gpd.GeoDataFrame(records, geometry='geometry', crs=seg.crs)
+    if not tx:
+        # Nullable 32-bit integer, including tiles without flight metadata.
+        frame['flline_id'] = pd.array(frame['flline_id'], dtype='Int32')
+    missing = int((frame['Flightline'] == '').sum())
+    if missing:
+        print(f'WARNING: Tile Index {circuit}: {missing}/{len(frame)} tiles have no matched flight metadata.', flush=True)
+    print('Tile Index attribution uses GPS range candidates; overlapping flights may require review.', flush=True)
 
     if frame.geom_type.isin(['MultiPolygon']).any():
         raise ValueError('Client Tile Index requires one singlepart polygon per tile; multipart segment detected')
@@ -655,8 +680,12 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
         'fields': [c for c in frame.columns if c != 'geometry'],
         'zone': str(zone),
         'year': str(YEAR),
-        'tx_trajectory_attribution': bool(is_tx(circuit)),
-        'trajectory_index': str(TRAJECTORY_ROOT / 'trajectory_index.parquet') if is_tx(circuit) else None,
+        'tx_trajectory_attribution': bool(tx),
+        'trajectory_attribution': 'GPS_RANGE_CANDIDATES',
+        'trajectory_index': str(TRAJECTORY_ROOT / 'trajectory_index.parquet'),
+        'tiles_without_flight_metadata': missing,
+        'dx_flline_id_rule': 'earliest matched acquisition date, DDDYY integer' if not tx else None,
+        'dx_flightid_rule': 'same as Flightline' if not tx else None,
         'note': 'OBJECTID/Shape and GDB geometry fields are created later when this SHP is imported into the final delivery GDB.',
     }, indent=2), encoding='utf-8')
     return shp, frame
