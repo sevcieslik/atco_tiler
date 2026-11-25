@@ -1,4 +1,4 @@
-ATCO Retiler v1.08-dev | Operator and technical documentation
+ATCO Retiler v1.08.04 | Operator and technical documentation
 =============================================================
 
 STATUS: Development branch, Windows UAT required. Stable main remains v1.07.
@@ -16,7 +16,7 @@ scripts\INSTALL_RUNTIME_CORE.bat   Internal implementation called by the runtime
 scripts\INSTALL_LIDAR_SUPPORT.bat  Optional/manual PDAL install for LAZ/zLAS.
                                    GUI installs PDAL automatically when needed.
 scripts\INSTALL_TRAJECTORY_SUPPORT.bat
-                                   Optional/manual PyArrow for TX trajectory data;
+                                   Optional/manual PyArrow for TX/DX trajectory data;
                                    GUI checks this automatically when applicable.
 ATCO v1.08 uses pinned Miniforge 26.9.4-2 (Conda with libmamba). On first run,\nATCO_RETILER.bat downloads and installs it under %LOCALAPPDATA%\\ATCO\\miniforge3\nfor the current user, after verifying the official SHA256 checksum. Existing\nworking scripts\\.venv environments do not trigger the download.\nHost Conda is not modified. ATCO_CONDA_BAT may explicitly select a known\ncompatible Conda installation. Windows security restrictions must be respected.\nRuntime installer log: scripts\\logs\\install_runtime_*.log.
 Scripts must remain complete after ZIP extraction. If files disappear or Windows
@@ -182,7 +182,7 @@ INSTALL_RUNTIME.bat creates a lean Python 3.11 Conda scripts\.venv with
 GeoPandas and Rasterio. PDAL is installed on demand when LAZ/zLAS needs
 coverage validation/processing. INSTALL_LIDAR_SUPPORT.bat remains an
 optional manual fallback. INSTALL_TRAJECTORY_SUPPORT.bat adds optional
-PyArrow for TX trajectory matching. Global Mapper is required for ECW,
+PyArrow for TX/DX trajectory matching. Global Mapper is required for ECW,
 EzLAS.exe for zLAS. TIFF/ECW can run without PDAL if LAZ/zLAS is unselected.
 No new system Python or Conda-base update is required.
 
