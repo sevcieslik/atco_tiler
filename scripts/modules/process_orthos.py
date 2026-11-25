@@ -5,6 +5,7 @@ from circuit_identity import resolve_circuit_id
 
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -331,6 +332,7 @@ def write_prj(path: Path, crs):
 
 
 def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_count: int, crs, res, overwrite=False):
+    """Write and verify a complete tile in bounded windows on the original grid."""
     out_tif.parent.mkdir(parents=True, exist_ok=True)
     if out_tif.exists() and not overwrite:
         return 'exists', 0, 0.0
@@ -342,20 +344,13 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
     if not chosen:
         return 'no source coverage', 0, 0.0
     datasets = []
+    final_tmp = out_tif.with_suffix('.nodata.tmp.tif')
     try:
         for p in chosen:
             datasets.append(rasterio.open(p))
-        # ATCO source ortho backgrounds can use RGBI=(254,254,254,254)
-        # or (255,255,255,255) as unmasked fill values. Reject both tuples
-        # *before* mosaicking: otherwise method='first' may select the white
-        # fringe and obscure real imagery from an overlapping source.
-        #
-        # The fifth merge band is an in-memory validity marker. It is never
-        # written to the client TIFF (which retains exactly four RGBI bands).
+        # Maintain the original first-valid RGBI overlap rule. The fifth
+        # temporary band is a validity marker, not a delivery band.
         def merge_first_nonwhite(merged_data, new_data, merged_mask, new_mask, **kwargs):
-            # Rasterio can pass a scalar False mask for a completely
-            # unmasked source, rather than a 4 x height x width array.
-            # Support scalar, 2-D dataset and per-band 3-D masks.
             mask = np.asarray(new_mask, dtype=bool)
             if mask.ndim == 0:
                 candidate = np.full(new_data.shape[1:], not bool(mask), dtype=bool)
@@ -368,68 +363,78 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
             np.copyto(merged_data[:4], new_data[:4], where=copy_pixel[None, :, :])
             merged_data[4][copy_pixel] = 1
 
-        arr, affine = merge(
-            datasets,
-            bounds=bounds,
-            res=res,
-            indexes=[1, 2, 3, 4],
-            output_count=5,
-            masked=False,
-            nodata=0,
-            method=merge_first_nonwhite,
-            target_aligned_pixels=False,
-        )
-        source_valid = arr[4] == 1
-        data = arr[:4].copy()
-        aoi_valid = geometry_mask([circuit_aoi], out_shape=data.shape[1:], transform=affine, invert=True)
-        valid = source_valid & aoi_valid
-        valid_pixels = int(valid.sum())
-        total_pixels = int(valid.size)
-        coverage_pct = (100.0 * valid_pixels / total_pixels) if total_pixels else 0.0
-
-        # ArcGIS Pro compatibility: restore explicit GeoTIFF NoData=255
-        # while retaining the newer source overlap/background exclusion above.
-        # Any valid sample equal to 255 is nudged to 254 so GIS renderers that
-        # apply band-level nodata do not hide legitimate bright image pixels.
-        # This is a deliberate rollback of the TIFF internal-mask approach.
-        valid_255 = (data == 255) & valid[None, :, :]
-        if np.any(valid_255):
-            data[valid_255] = 254
-        data[:, ~valid] = 255
-
+        left, bottom, right, top = bounds
+        rx, ry = res
+        width = int(round((right - left) / rx))
+        height = int(round((top - bottom) / ry))
+        if width <= 0 or height <= 0:
+            raise ValueError(f'Invalid raster dimensions for {blocknum}: {width} x {height}')
+        affine = rasterio.transform.from_origin(left, top, rx, ry)
+        dtype = datasets[0].dtypes[0]
+        window_size = 1024
         profile = datasets[0].profile.copy()
         for key in ('blockxsize', 'blockysize', 'photometric', 'interleave', 'nodata'):
             profile.pop(key, None)
-        profile.update(
-            driver='GTiff', height=data.shape[1], width=data.shape[2], count=4,
-            dtype=data.dtype, transform=affine, crs=crs, nodata=255,
-            tiled=True, blockxsize=512, blockysize=512, compress='lzw',
-            photometric='RGB', BIGTIFF='IF_SAFER',
-        )
-        final_tmp = out_tif.with_suffix('.nodata.tmp.tif')
+        profile.update(driver='GTiff', height=height, width=width, count=4,
+                       dtype=dtype, transform=affine, crs=crs, nodata=255,
+                       tiled=True, blockxsize=512, blockysize=512, compress='lzw',
+                       photometric='RGB', BIGTIFF='IF_SAFER')
+        valid_pixels = 0
+        total_pixels = width * height
+        expected = []
+        source_bounds = [(ds, tuple(ds.bounds)) for ds in datasets]
         if final_tmp.exists():
             final_tmp.unlink()
         with rasterio.open(final_tmp, 'w', **profile) as dst:
-            dst.write(data)
-            dst.colorinterp = (
-                ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
-            )
+            dst.colorinterp = (ColorInterp.red, ColorInterp.green,
+                               ColorInterp.blue, ColorInterp.undefined)
+            for row in range(0, height, window_size):
+                for col in range(0, width, window_size):
+                    window = rasterio.windows.Window(col, row,
+                        min(window_size, width-col), min(window_size, height-row))
+                    wb = rasterio.windows.bounds(window, affine)
+                    wt = rasterio.windows.transform(window, affine)
+                    shape = (int(window.height), int(window.width))
+                    candidates = [ds for ds, b in source_bounds
+                                  if b[0] < wb[2] and b[2] > wb[0]
+                                  and b[1] < wb[3] and b[3] > wb[1]]
+                    aoi_valid = geometry_mask([circuit_aoi], out_shape=shape,
+                                              transform=wt, invert=True)
+                    if candidates and aoi_valid.any():
+                        arr, actual_transform = merge(
+                            candidates, bounds=wb, res=res, indexes=[1, 2, 3, 4],
+                            output_count=5, masked=False, nodata=0, dtype=dtype,
+                            method=merge_first_nonwhite, target_aligned_pixels=False)
+                        if arr.shape != (5, *shape) or not actual_transform.almost_equals(wt):
+                            raise RuntimeError(f'Window grid mismatch: {blocknum} {window}')
+                        valid = (arr[4] == 1) & aoi_valid
+                        data = arr[:4]
+                        # Preserve the ArcGIS Pro NoData=255 convention.
+                        data[(data == 255) & valid[None, :, :]] = 254
+                        data[:, ~valid] = 255
+                        valid_pixels += int(valid.sum())
+                    else:
+                        data = np.full((4, *shape), 255, dtype=dtype)
+                    dst.write(data, window=window)
+                    expected.append((window, hashlib.sha256(data.tobytes()).digest()))
+        # Read back every window, never the complete image. Compare the
+        # uncompressed pixel bytes including both valid and NoData pixels.
         with rasterio.open(final_tmp) as check:
-            if check.nodata != 255:
-                raise RuntimeError(f'Expected GeoTIFF NoData=255 for ArcGIS Pro: {final_tmp}')
-            if not np.array_equal(check.read()[:, ~valid], np.full((4, (~valid).sum()), 255, dtype=data.dtype)):
-                raise RuntimeError(f'Output TIFF invalid pixels not set to 255: {final_tmp}')
-            if not np.array_equal(check.read()[:, valid], data[:, valid]):
-                raise RuntimeError(f'Valid TIFF samples changed on write: {final_tmp}')
-
-        if out_tif.exists():
-            out_tif.unlink()
+            if (check.nodata != 255 or check.count != 4 or check.width != width
+                    or check.height != height or not check.transform.almost_equals(affine)):
+                raise RuntimeError(f'Output TIFF metadata mismatch: {final_tmp}')
+            for window, digest in expected:
+                if hashlib.sha256(check.read(window=window).tobytes()).digest() != digest:
+                    raise RuntimeError(f'Output TIFF samples changed on write: {final_tmp} {window}')
         final_tmp.replace(out_tif)
         write_prj(out_tif, crs)
+        coverage_pct = 100.0 * valid_pixels / total_pixels
         return f'created from {len(chosen)} source(s)', valid_pixels, coverage_pct
     finally:
         for ds in datasets:
             ds.close()
+        if final_tmp.exists():
+            final_tmp.unlink()
 
 
 def load_config():
@@ -871,6 +876,7 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
         tiff_jobs.append((blocknum, row.geometry.bounds, tif_dir/f'{blocknum}.tif'))
 
     tiff_workers = resolve_parallel_workers(configured_parallel_workers(), len(tiff_jobs))
+    print('TIFF export: 1024 x 1024 pixel windows; windowed read-back QA.', flush=True)
 
     def _tiff_job(job):
         blocknum, bounds, out_tif = job
@@ -1020,4 +1026,6 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    # GDAL cache is process-wide, not a separate budget per TIFF worker.
+    with rasterio.Env(GDAL_CACHEMAX=128 * 1024 * 1024):
+        raise SystemExit(main())
