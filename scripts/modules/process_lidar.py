@@ -432,6 +432,34 @@ def pdal_summary(path: Path, *, pdal_exe=None, log=None):
     }
 
 
+def missing_source_crs(expected_crs):
+    """ATCO TerraScan header repair: assign AOI horizontal CRS + CGVD2013."""
+    from pyproj.crs import CompoundCRS
+    horizontal = horizontal_crs(expected_crs)
+    if not any(horizontal.equals(CRS.from_epsg(code)) for code in (2955, 2956)):
+        raise ValueError(
+            f'Missing LiDAR CRS: automatic assignment is limited to ATCO NAD83(CSRS) '
+            f'UTM zones 11/12; AOI CRS is {crs_short_label(horizontal)}.'
+        )
+    return CRS.from_user_input(CompoundCRS(
+        name=f'{horizontal.name} + CGVD2013 height',
+        components=[horizontal, CRS.from_epsg(6647)],
+    ).to_wkt())
+
+
+def effective_source_crs(row, expected_crs, log=None):
+    """Only an absent CRS may be assigned; never replace an existing one."""
+    if row.get('crs_wkt'):
+        return CRS.from_wkt(row['crs_wkt'])
+    assigned = missing_source_crs(expected_crs)
+    row['assigned_crs_wkt'] = assigned.to_wkt()
+    emit = log or (lambda line: print(line, flush=True))
+    emit(f'WARNING: {row["name"]}: missing source CRS; assuming AOI '
+         f'{crs_short_label(horizontal_crs(assigned))} + CGVD2013 for LiDAR export only; '
+         'no coordinate transformation; source file unchanged.')
+    return assigned
+
+
 def cache_fingerprint(files):
     return [{'path': str(p), 'size': p.stat().st_size, 'mtime_ns': p.stat().st_mtime_ns} for p in files]
 
@@ -442,7 +470,8 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
     if cache.is_file():
         try:
             saved = json.loads(cache.read_text(encoding='utf-8'))
-            if saved.get('fingerprint') == fp and saved.get('crs', {}).get('expected_horizontal_wkt') == horizontal_crs(expected_crs).to_wkt():
+            if (saved.get('fingerprint') == fp and saved.get('crs', {}).get('expected_horizontal_wkt') == horizontal_crs(expected_crs).to_wkt()
+                    and saved.get('crs', {}).get('header_policy') == 'assign_missing_only_v1'):
                 rows = saved['files']
                 meta = saved.get('crs') or {}
                 if meta.get('output_crs_wkt'):
@@ -471,17 +500,11 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
                 print(f'  Indexed {i}/{len(files)}', flush=True)
     rows.sort(key=lambda r: r['path'].casefold())
 
-    missing = [r['name'] for r in rows if not r['crs_wkt']]
-    if missing:
-        raise ValueError(
-            f'{len(missing)} source LAS/LAZ file(s) have no CRS in the header. Example: {missing[0]}. '
-            'Fix the headers before processing; v1 will not guess CRS.'
-        )
     expected_horizontal = horizontal_crs(expected_crs)
     mismatched = []
     source_crs_objects = []
     for r in rows:
-        src = CRS.from_wkt(r['crs_wkt'])
+        src = effective_source_crs(r, expected_crs)
         source_crs_objects.append(src)
         if not horizontal_crs(src).equals(expected_horizontal):
             mismatched.append((r['name'], crs_short_label(horizontal_crs(src)), src.to_string()))
@@ -518,6 +541,8 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
 
     rows_meta = {
         'expected_horizontal_wkt': expected_horizontal.to_wkt(),
+        'header_policy': 'assign_missing_only_v1',
+        'assigned_missing_crs_files': [r['name'] for r in rows if r.get('assigned_crs_wkt')],
         'horizontal_crs': crs_short_label(expected_horizontal),
         'vertical_crs': crs_short_label(verticals[0]) if verticals and verticals[0] is not None else None,
         'output_crs_wkt': output_crs.to_wkt(),
@@ -787,7 +812,10 @@ def pipeline_for_segment(seg_row, chosen, laz_out: Path, temp_las: Path | None, 
     endpoints = []
     for idx, r in enumerate(chosen):
         tag = f'reader_{idx}'
-        stages.append({'type': 'readers.las', 'filename': r['path'], 'tag': tag})
+        reader = {'type': 'readers.las', 'filename': r['path'], 'tag': tag}
+        if r.get('assigned_crs_wkt'):
+            reader['default_srs'] = r['assigned_crs_wkt']
+        stages.append(reader)
         endpoints.append(tag)
     if len(endpoints) > 1:
         stages.append({'type': 'filters.merge', 'inputs': endpoints, 'tag': 'merged'})
@@ -953,6 +981,14 @@ def run_pdal_segment(seg_row, chosen, laz_out: Path, temp_las: Path | None, crs)
         manifest.write_text(json.dumps(pipeline, indent=2), encoding='utf-8')
         try:
             run(['pdal', 'pipeline', str(manifest)])
+            if any(r.get('assigned_crs_wkt') for r in chosen):
+                for output in (laz_out, temp_las):
+                    if output is None:
+                        continue
+                    header = pdal_summary(output)
+                    if not header['crs_wkt'] or not CRS.from_wkt(header['crs_wkt']).equals(CRS.from_user_input(crs)):
+                        raise RuntimeError(f'Output CRS verification failed after missing-header assignment: {output}')
+                    print(f'Output CRS verification PASS: {output.name}', flush=True)
         except Exception:
             if laz_out.exists():
                 laz_out.unlink()
