@@ -1290,39 +1290,13 @@ class RetilerApp(tk.Tk):
             return
 
         needs_ortho = any(x in selected for x in ("TIFF","ECW"))
-        needs_pc = any(x in selected for x in ("LAZ","zLAS"))
+        needs_pc = any(x in selected for x in ("LAZ","zLAS","Tile Index"))
         if needs_ortho and not self.mapped.get("orthos"):
             messagebox.showerror(APP_NAME, "Orthos input is missing.")
             return
         if needs_pc and not self.mapped.get("point_cloud"):
             messagebox.showerror(APP_NAME, "Point Cloud input is missing.")
             return
-        # Index-only runs require the current delivery LAZ tiles.
-        if "Tile Index" in selected and not needs_pc:
-            incomplete = []
-            for record in self.entity_records:
-                if not record["has_segments"]:
-                    continue
-                base = core.output_base(self.output_root, record["entity"])
-                laz_dir = base / product_folder("LAZ")
-                missing = sum(
-                    not self._is_valid_file(laz_dir / f"{name}.laz")
-                    for name in record["cloud"]
-                )
-                if missing:
-                    incomplete.append(
-                        f"{record['entity']}: {missing}/{len(record['cloud'])} LAZ missing or empty")
-            if incomplete:
-                details = "\n".join(incomplete)
-                messagebox.showwarning(
-                    APP_NAME,
-                    "Tile Index requires complete LAZ output for the selected entities.\n\n"
-                    f"{details}\n\n"
-                    "Generate the missing LAZ files first, or select LAZ + Tile Index together."
-                )
-                self.log(f"Tile Index blocked: {details}", "WARN")
-                return
-
         # Missing PDAL is installed noninteractively in the worker before any
         # TIFF/ECW work begins. Do not block the GUI or pre-download for imagery.
         if "zLAS" in selected and not EZLAS.is_file():
@@ -1385,11 +1359,7 @@ class RetilerApp(tk.Tk):
             env = os.environ.copy()
             env["ATCO_PARALLEL_WORKERS"] = str(workers)
             overwrite = [] if rerun else ["--overwrite"]
-            index_needs_pdal = "Tile Index" in selected and any(
-                record["has_segments"] and
-                (Path(output_root) / record["entity"] / product_folder("LAZ")).is_dir() and
-                any((Path(output_root) / record["entity"] / product_folder("LAZ")).glob("*.laz"))
-                for record in records)
+            index_needs_pdal = "Tile Index" in selected and any(record["has_segments"] for record in records)
             if index_needs_pdal or any(product in selected for product in ("LAZ", "zLAS")):
                 self.log_queue.put(("LINE",
                     "Checking optional PDAL support for LAZ/zLAS or Tile Index attribution..."))
@@ -1469,8 +1439,10 @@ class RetilerApp(tk.Tk):
                         sys.executable, str(MODULES / "process_lidar.py"),
                         "--aoi", aoi, "--output-root", str(output_root), *overwrite,
                     ]
-                    if any(p in selected for p in ("LAZ", "zLAS")):
+                    if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")):
                         args += ["--source", str(input_sources["point_cloud"])]
+                    if "Tile Index" in selected and not any(p in selected for p in ("LAZ", "zLAS")):
+                        args += ["--index-only"]
                     if "zLAS" in selected:
                         args += ["--zlas", "--ezlas-exe", str(EZLAS)]
                     if "Tile Index" in selected:
@@ -1871,12 +1843,12 @@ class RetilerApp(tk.Tk):
         if any(p in selected for p in ("TIFF", "ECW")) and not self.mapped.get("orthos"):
             messagebox.showwarning(APP_NAME, "Input/orthos is missing.")
             return
-        if any(p in selected for p in ("LAZ", "zLAS")) and not self.mapped.get("point_cloud"):
+        if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")) and not self.mapped.get("point_cloud"):
             messagebox.showwarning(APP_NAME, "Input/point_cloud is missing.")
             return
         # A mapped directory is not proof of input data. Reject empty cloud
         # folders before starting a worker or installing optional PDAL.
-        if any(p in selected for p in ("LAZ", "zLAS")):
+        if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")):
             cloud_dir = Path(self.mapped["point_cloud"])
             if not any(p.is_file() and p.suffix.lower() in (".las", ".laz")
                        for p in cloud_dir.rglob("*")):
@@ -1887,8 +1859,8 @@ class RetilerApp(tk.Tk):
                 })
                 self.validate_btn.configure(state="normal", text="✓  Validate Input")
                 messagebox.showwarning(APP_NAME,
-                    "LAZ/zLAS is selected but Input/point_cloud contains no LAS/LAZ files.\n\n"
-                    "Add point cloud files or deselect LAZ and zLAS, then Validate Input again.")
+                    "LAZ/zLAS or Tile Index is selected but Input/point_cloud contains no LAS/LAZ files.\n\n"
+                    "Add point cloud files or deselect LAZ, zLAS and Tile Index, then Validate Input again.")
                 return
         self.validating = True
         self._validation_products = tuple(selected)
@@ -1906,7 +1878,7 @@ class RetilerApp(tk.Tk):
         try:
             from input_eligibility import discover_eligible
             pdal_exe = None
-            if any(p in selected for p in ("LAZ", "zLAS")):
+            if any(p in selected for p in ("LAZ", "zLAS", "Tile Index")):
                 from ensure_lidar_support import pdal_executable, pdal_ready
                 if not pdal_ready():
                     self.log_queue.put(("LINE",
