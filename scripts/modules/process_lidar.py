@@ -795,10 +795,11 @@ def trajectory_attributes(laz_path: Path, trajectory_index):
     Return paired date/flightline lists and the earliest acquisition DDDYY.
     Temporal overlap alone does not prove the aircraft supplied points.
     """
-    if trajectory_index is None:
-        return '', '', None
-    rng = gps_time_range(laz_path)
-    if not rng:
+    return trajectory_attributes_from_range(gps_time_range(laz_path), trajectory_index, laz_path)
+
+
+def trajectory_attributes_from_range(rng, trajectory_index, label):
+    if trajectory_index is None or not rng:
         return '', '', None
     lo, hi = rng
     if not (float('-inf') < lo <= hi < float('inf')):
@@ -820,12 +821,35 @@ def trajectory_attributes(laz_path: Path, trajectory_index):
     dates = ', '.join(day.isoformat() for day, _ in ordered)
     lines = ', '.join(line for _, line in ordered)
     if any(len(value.encode('utf-8')) > 254 for value in (dates, lines)):
-        raise ValueError(f'Tile Index flight attributes exceed SHP text limit: {laz_path}')
+        raise ValueError(f'Tile Index flight attributes exceed SHP text limit: {label}')
     julian = int(ordered[0][0].strftime('%j%y'))
     return dates, lines, julian
 
 
-def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz_dir: Path | None = None):
+def source_segment_gps_range(seg_row, chosen, crs):
+    """Read GPS range from actual points inside the approved segment; no LAS writer."""
+    if not chosen:
+        return None
+    with tempfile.TemporaryDirectory(prefix='atco_tile_index_') as tmp:
+        tmp = Path(tmp)
+        manifest, metadata = tmp / 'pipeline.json', tmp / 'metadata.json'
+        # Reuse the exact reader/crop/noise-filter stages from delivery export.
+        # The default_srs on missing headers is in-memory only; no source or
+        # output LAS/LAZ header is written by this pipeline.
+        stages = pipeline_for_segment(seg_row, chosen, tmp / 'unused.laz', None, crs)['pipeline'][:-1]
+        stages.extend([
+            {'type': 'filters.stats', 'inputs': ['clean'], 'dimensions': 'GpsTime', 'tag': 'gps_stats'},
+            {'type': 'writers.null', 'inputs': ['gps_stats']},
+        ])
+        manifest.write_text(json.dumps({'pipeline': stages}), encoding='utf-8')
+        run(['pdal', 'pipeline', str(manifest), '--metadata', str(metadata), '--stream'])
+        stat = _find_stats_dimension(json.loads(metadata.read_text(encoding='utf-8')), 'GpsTime')
+        if not stat or int(stat.get('count', 0)) == 0:
+            return None
+        return float(stat['minimum']), float(stat['maximum'])
+
+
+def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz_dir: Path | None = None, source_inventory=None):
     """Create the intermediate client Tile Index as a shapefile.
 
     Retiler deliberately stops at SHP.  The final project/entity GDB is assembled
@@ -837,22 +861,23 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     zone = utm_zone(seg.crs)
     client_name = client_entity_name(circuit)
 
-    # Do not publish an apparently complete client index without its LAZ inputs.
-    # This also protects CLI callers and combined LAZ + Tile Index runs.
-    laz_dir = Path(laz_dir) if laz_dir is not None else base / product_folder('LAZ')
-    missing_laz = []
-    for name in seg['PointCloudName']:
-        path = laz_dir / f'{name}.laz'
-        if not path.is_file() or path.stat().st_size == 0:
-            missing_laz.append(path.name)
-    if missing_laz:
-        examples = ', '.join(missing_laz[:5])
-        raise RuntimeError(
-            f'Tile Index blocked for {circuit}: {len(missing_laz)}/{len(seg)} '
-            f'expected LAZ tiles are missing or empty in {laz_dir}. '
-            f'Examples: {examples}. Generate the missing LAZ tiles first, '
-            'then regenerate Tile Index, or select LAZ + Tile Index together.'
-        )
+    if source_inventory is None:
+        # Do not publish an apparently complete client index without its LAZ inputs.
+        # This also protects CLI callers and combined LAZ + Tile Index runs.
+        laz_dir = Path(laz_dir) if laz_dir is not None else base / product_folder('LAZ')
+        missing_laz = []
+        for name in seg['PointCloudName']:
+            path = laz_dir / f'{name}.laz'
+            if not path.is_file() or path.stat().st_size == 0:
+                missing_laz.append(path.name)
+        if missing_laz:
+            examples = ', '.join(missing_laz[:5])
+            raise RuntimeError(
+                f'Tile Index blocked for {circuit}: {len(missing_laz)}/{len(seg)} '
+                f'expected LAZ tiles are missing or empty in {laz_dir}. '
+                f'Examples: {examples}. Generate the missing LAZ tiles first, '
+                'then regenerate Tile Index, or select LAZ + Tile Index together.'
+            )
     trajectory_index = load_trajectory_index()
     if trajectory_index is None or trajectory_index.empty:
         raise RuntimeError(
@@ -860,10 +885,31 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
             'Publish trajectory_index.parquet before generating the client Tile Index.'
         )
     tx = is_tx(circuit)
+    source_mode = source_inventory is not None
+    ranges = {}
+    if source_mode:
+        import time
+        started = time.monotonic()
+        # Bound concurrent decompression to avoid excessive memory/disk pressure.
+        workers = min(4, resolve_parallel_workers(configured_parallel_workers(), len(seg)))
+        jobs = [(str(row.PointCloudName), row, intersecting_sources(row.geometry, source_inventory)) for _, row in seg.iterrows()]
+        print(f'Tile Index: reading cropped source GPS Time for {len(jobs)} segments; workers={workers}; no LiDAR exports', flush=True)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(source_segment_gps_range, row, chosen, seg.crs): block for block, row, chosen in jobs}
+            for i, fut in enumerate(as_completed(futures), 1):
+                block = futures[fut]
+                try:
+                    ranges[block] = fut.result()
+                except Exception as exc:
+                    raise RuntimeError(f'Tile Index source GPS scan failed for {block}: {exc}') from exc
+                if i % 10 == 0 or i == len(jobs):
+                    print(f'Tile Index GPS scan {i}/{len(jobs)}; elapsed={time.monotonic()-started:.1f}s', flush=True)
     records = []
     for _, row in seg.iterrows():
         fldate, flightline, julian = '', '', None
-        if laz_dir is not None and trajectory_index is not None:
+        if source_mode:
+            fldate, flightline, julian = trajectory_attributes_from_range(ranges[str(row.PointCloudName)], trajectory_index, row.PointCloudName)
+        else:
             laz_path = laz_dir / f'{row.PointCloudName}.laz'
             fldate, flightline, julian = trajectory_attributes(laz_path, trajectory_index)
         if tx:
@@ -899,7 +945,7 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     if missing == len(frame):
         raise RuntimeError(
             f'Tile Index blocked for {circuit}: no flight metadata matched any of the '
-            f'{len(frame)} LAZ tiles. Check PDAL, LAZ GPS Time and the trajectory index.'
+            f'{len(frame)} segments. Check PDAL, source GPS Time and the trajectory index.'
         )
     if missing:
         print(f'WARNING: Tile Index {circuit}: {missing}/{len(frame)} tiles have no matched flight metadata.', flush=True)
@@ -917,6 +963,8 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     qa = base / 'QA' / 'TILES'
     qa.mkdir(parents=True, exist_ok=True)
     frame.drop(columns='geometry').to_csv(qa / 'TILES_attributes.csv', index=False, encoding='utf-8-sig')
+    if source_mode:
+        pd.DataFrame([{'NAME': name, 'gps_min': rng[0] if rng else None, 'gps_max': rng[1] if rng else None} for name, rng in ranges.items()]).sort_values('NAME').to_csv(qa / 'TILES_source_gps.csv', index=False, encoding='utf-8-sig')
     (qa / 'TILES_schema.json').write_text(json.dumps({
         'entity': circuit,
         'client_entity_name': client_name,
@@ -929,6 +977,7 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
         'year': str(YEAR),
         'tx_trajectory_attribution': bool(tx),
         'trajectory_attribution': 'GPS_RANGE_CANDIDATES',
+        'gps_evidence': 'CROPPED_SOURCE_POINTS' if source_mode else 'FINAL_LAZ',
         'trajectory_index': str(TRAJECTORY_ROOT / 'trajectory_index.parquet'),
         'tiles_without_flight_metadata': missing,
         'dx_flline_id_rule': 'earliest matched acquisition date, DDDYY integer' if not tx else None,
@@ -1373,7 +1422,9 @@ def validate_pdal_available():
     return (p.stdout or p.stderr).strip()
 
 
-def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, make_zlas=False, make_index=False, overwrite=False, ezlas_exe=None):
+def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, make_zlas=False, make_index=False, overwrite=False, ezlas_exe=None, index_only=False):
+    if index_only and (not make_index or make_zlas or source_folder is None):
+        raise ValueError('--index-only requires --tile-index and --source, without --zlas')
     pdal_version = validate_pdal_available() if source_folder is not None else None
 
     polygon = find_polygon_shp(aoi_input)
@@ -1410,6 +1461,16 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
     files, selection_mode = select_entity_clouds(source_folder, circuit, known_entities)
     print(f"LiDAR source selection for {circuit}: {selection_mode}, {len(files)} file(s)", flush=True)
     inventory, point_cloud_crs, cloud_crs_meta = cloud_inventory(files, aoi['crs'], qa_dir)
+
+    if index_only:
+        tile_index_path, _ = build_tile_index_shp(circuit, seg, base, source_inventory=inventory)
+        summary = {'created_at': now_iso(), 'circuit': circuit, 'aoi_revision': aoi['revision_code'],
+                   'segments_source': str(segment_shp), 'source_point_cloud_folder': str(source_folder),
+                   'source_file_count': len(files), 'tile_index_shp': str(tile_index_path),
+                   'mode': 'tile_index_only_from_source', 'output_root': str(base)}
+        (base / 'QA' / 'TILES' / 'execution.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+        print(f'Tile Index SHP: {tile_index_path}', flush=True)
+        return summary
 
     ezlas = None
     if make_zlas:
@@ -1643,6 +1704,7 @@ def main():
     ap.add_argument('--output-root', default=str(DEFAULT_OUTPUT_ROOT))
     ap.add_argument('--zlas', action='store_true')
     ap.add_argument('--tile-index', '--tiles-gdb', dest='tile_index', action='store_true', help='Create intermediate Tile Index shapefile for later import into the final delivery GDB')
+    ap.add_argument('--index-only', action='store_true', help='Use cropped source LAS/LAZ GPS Time; do not export LiDAR')
     ap.add_argument('--overwrite', action='store_true')
     ap.add_argument('--ezlas-exe')
     a = ap.parse_args()
@@ -1653,7 +1715,7 @@ def main():
             raise ValueError('--source is required unless --tile-index is the only requested product')
         process(
             Path(a.aoi), Path(a.source) if a.source else None, Path(a.output_root),
-            make_zlas=a.zlas, make_index=a.tile_index, overwrite=a.overwrite, ezlas_exe=a.ezlas_exe,
+            make_zlas=a.zlas, make_index=a.tile_index, overwrite=a.overwrite, ezlas_exe=a.ezlas_exe, index_only=a.index_only,
         )
         return 0
     except Exception as exc:
