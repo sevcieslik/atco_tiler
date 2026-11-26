@@ -317,7 +317,9 @@ def crs_from_json(obj):
                     return got
         # Recurse into containers only; filenames and unrelated numeric
         # metadata must not accidentally be interpreted as CRS definitions.
-        for value in obj.values():
+        for key, value in obj.items():
+            if key == 'units':
+                continue
             if isinstance(value, (dict, list)):
                 got = crs_from_json(value)
                 if got is not None:
@@ -334,11 +336,15 @@ def crs_from_json(obj):
 def has_explicit_crs_metadata(obj):
     """Distinguish blank projection metadata from a nonempty unparseable CRS."""
     keys = ('compoundwkt', 'wkt', 'spatialreference', 'comp_spatialreference',
-            'srs', 'horizontal', 'prettywkt', 'proj4', 'projjson', 'coordinate_system')
+            'srs', 'horizontal', 'prettywkt', 'prettycompoundwkt', 'proj4', 'projjson', 'coordinate_system', 'vertical')
     if isinstance(obj, dict):
+        if str(obj.get('user_id', '')).strip().casefold() == 'lasf_projection':
+            return True
         for key, value in obj.items():
+            if key == 'units':
+                continue
             if key in keys:
-                if isinstance(value, str) and value.strip():
+                if isinstance(value, str) and value.strip().casefold() not in ('', 'unknown', 'undefined', 'none', 'null'):
                     return True
                 if isinstance(value, dict) and value.get('type') in (
                     'ProjectedCRS', 'CompoundCRS', 'GeographicCRS', 'GeodeticCRS', 'BoundCRS', 'VerticalCRS'
@@ -433,13 +439,14 @@ def pdal_summary(path: Path, *, pdal_exe=None, log=None):
         meta = inspect('--metadata')
         bounds = bounds or bbox_from_obj(meta)
         source_crs = source_crs or crs_from_json(meta)
-    if not bounds or source_crs is None:
+    explicit_crs = any(has_explicit_crs_metadata(doc) for _, doc in docs) if source_crs is None else False
+    if not bounds or (source_crs is None and explicit_crs):
         for option, doc in docs:
             emit(f'PDAL diagnostic JSON ({path.name}, {option}): {json.dumps(doc, ensure_ascii=False)}')
     if not bounds:
         raise ValueError(f'LiDAR extent unavailable: {path}')
     if source_crs is None:
-        if any(has_explicit_crs_metadata(doc) for _, doc in docs):
+        if explicit_crs:
             raise ValueError(f'LiDAR CRS metadata exists but cannot be interpreted: {path}. Do not overwrite an unknown CRS.')
         emit(f'WARNING: LiDAR CRS unavailable after summary and metadata inspection: {path}')
     else:
