@@ -331,6 +331,26 @@ def crs_from_json(obj):
     return None
 
 
+def has_explicit_crs_metadata(obj):
+    """Distinguish blank projection metadata from a nonempty unparseable CRS."""
+    keys = ('compoundwkt', 'wkt', 'spatialreference', 'comp_spatialreference',
+            'srs', 'horizontal', 'prettywkt', 'proj4', 'projjson', 'coordinate_system')
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if key in keys:
+                if isinstance(value, str) and value.strip():
+                    return True
+                if isinstance(value, dict) and value.get('type') in (
+                    'ProjectedCRS', 'CompoundCRS', 'GeographicCRS', 'GeodeticCRS', 'BoundCRS', 'VerticalCRS'
+                ):
+                    return True
+            if isinstance(value, (dict, list)) and has_explicit_crs_metadata(value):
+                return True
+    elif isinstance(obj, list):
+        return any(has_explicit_crs_metadata(v) for v in obj if isinstance(v, (dict, list)))
+    return False
+
+
 def horizontal_crs(crs):
     """Return the 2D/horizontal component of projected or compound CRS."""
     c = CRS.from_user_input(crs)
@@ -419,6 +439,8 @@ def pdal_summary(path: Path, *, pdal_exe=None, log=None):
     if not bounds:
         raise ValueError(f'LiDAR extent unavailable: {path}')
     if source_crs is None:
+        if any(has_explicit_crs_metadata(doc) for _, doc in docs):
+            raise ValueError(f'LiDAR CRS metadata exists but cannot be interpreted: {path}. Do not overwrite an unknown CRS.')
         emit(f'WARNING: LiDAR CRS unavailable after summary and metadata inspection: {path}')
     else:
         emit(f'LiDAR header OK: {path.name}; CRS={crs_short_label(source_crs)}; bounds={bounds}')
