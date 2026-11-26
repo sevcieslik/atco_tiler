@@ -135,6 +135,7 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=Non
     emit(f"Coverage scan: {len(inputs)} local AOI files; {len(registered)} registered entities")
     needs_image = any(p in products for p in ("TIFF", "ECW"))
     needs_cloud = any(p in products for p in ("LAZ", "zLAS"))
+    needs_index = "Tile Index" in products
     cache = {}
     qualified = []
     excluded = []
@@ -149,6 +150,9 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=Non
         if input_cov < MIN_AREA_COVERAGE:
             continue
         emit(f"Coverage candidate: {row['entity']} {row['revision']}; AOI coverage={input_cov:.3%}; CRS={row['crs'].to_string()}")
+        if needs_index and not any(p != "Tile Index" for p in products) and row["kind"] != "circuit":
+            excluded.append((row["entity"], "Tile Index requires approved segments"))
+            continue
         local_source = None
         if row["kind"] == "circuit":
             # Existing circuit pipeline validates source against the exact
@@ -176,7 +180,7 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=Non
             if image_cov < MIN_AREA_COVERAGE:
                 excluded.append((row["entity"], f"insufficient imagery footprint coverage ({image_cov:.3%}; requires 99%)"))
                 continue
-        if needs_cloud:
+        if needs_cloud or (needs_index and row["kind"] == "circuit"):
             key = ("cloud", row["crs"].to_wkt(), row["entity"])
             if key not in cache:
                 try:
