@@ -87,7 +87,7 @@ def _image_footprints(folder, crs):
     return unary_union(geoms), len(rasters)
 
 
-def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=(), log=None):
+def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=(), log=None, qa_dir=None, workers=None):
     from modules.cloud_source_selection import select_entity_clouds
     emit = log or (lambda line: None)
     selection_mode = 'all'
@@ -103,31 +103,15 @@ def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=()
         raise ValueError("No LAS/LAZ files under Input/point_cloud")
     if not pdal_exe:
         raise RuntimeError("PDAL required to inspect LiDAR footprints")
-    from modules.process_lidar import pdal_summary, horizontal_crs, vertical_crs, crs_short_label, effective_source_crs
-    footprints = []
-    failures = []
-    verticals = []
+    from modules.process_lidar import cloud_inventory, horizontal_crs, crs_short_label
     expected = horizontal_crs(crs)
     emit(f'LiDAR coverage: entity={entity}; files={len(files)}; selection={selection_mode}; expected CRS={crs_short_label(expected)}; PDAL={pdal_exe}')
-    for i, p in enumerate(files, 1):
-        emit(f'LiDAR coverage [{i}/{len(files)}]: {p}')
-        try:
-            rec = pdal_summary(p, pdal_exe=pdal_exe, log=emit)
-            source_crs = effective_source_crs(rec, crs, log=emit)
-            if not horizontal_crs(source_crs).equals(expected):
-                raise ValueError(f'LiDAR horizontal CRS mismatch: {p}; actual={crs_short_label(horizontal_crs(source_crs))}; expected={crs_short_label(expected)}')
-            verticals.append(vertical_crs(source_crs))
-            footprints.append(_to_crs(box(*rec['bounds']), source_crs, crs))
-        except Exception as exc:
-            failures.append(f'{p}: {type(exc).__name__}: {exc}')
-            emit(f'ERROR: {failures[-1]}')
-    emit(f'LiDAR coverage header results: {len(footprints)}/{len(files)} passed; {len(failures)} failed')
-    if failures:
-        raise ValueError(f'{len(failures)}/{len(files)} LiDAR header checks failed. First: {failures[0]}. See full Activity Log for all failures.')
-    if verticals and any(v is not None for v in verticals):
-        if any(v is None for v in verticals) or any(not v.equals(verticals[0]) for v in verticals if v is not None and verticals[0] is not None):
-            raise ValueError('Source LAS/LAZ have inconsistent or missing vertical CRS; standardise headers before processing.')
-    return unary_union(footprints), len(files)
+    # The same inventory is used by the export worker. It validates all
+    # source horizontal/vertical CRS before any bounds can count as coverage.
+    rows, _, _ = cloud_inventory(files, crs, qa_dir, pdal_exe=pdal_exe,
+                                 log=emit, workers=workers)
+    emit(f'LiDAR coverage header results: {len(rows)}/{len(files)} passed')
+    return unary_union([box(*r['bounds']) for r in rows]), len(files)
 
 
 def _coverage(subject, footprint):
@@ -136,7 +120,7 @@ def _coverage(subject, footprint):
     return float(subject.intersection(footprint).area / subject.area)
 
 
-def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=None,
+def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=None, output_root=None, workers=None,
                       segments_root=Path(r"W:\\APPS\\PIT\\ATCO\\segments\\circuit")):
     """Return verified candidates and spatial-coverage notes.
 
@@ -196,10 +180,13 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=Non
             key = ("cloud", row["crs"].to_wkt(), row["entity"])
             if key not in cache:
                 try:
+                    qa_dir = (Path(output_root) / row["entity"] / "QA" /
+                              ("LiDAR" if row["kind"] == "circuit" else "Converter")) if output_root is not None else None
                     cache[key] = _cloud_footprints(
                         mapped.get("point_cloud"), row["crs"], pdal_exe,
                         entity=row["entity"],
-                        registered_entities=[r["entity"] for r in registered], log=emit)
+                        registered_entities=[r["entity"] for r in registered], log=emit,
+                        qa_dir=qa_dir, workers=workers)
                 except ValueError as exc:
                     excluded.append((row["entity"], str(exc)))
                     continue
