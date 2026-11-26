@@ -87,12 +87,14 @@ def _image_footprints(folder, crs):
     return unary_union(geoms), len(rasters)
 
 
-def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=()):
+def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=(), log=None):
     from modules.cloud_source_selection import select_entity_clouds
+    emit = log or (lambda line: None)
+    selection_mode = 'all'
     if not folder or not Path(folder).is_dir():
         raise FileNotFoundError("Input/point_cloud folder is missing")
     if entity:
-        files, _selection_mode = select_entity_clouds(
+        files, selection_mode = select_entity_clouds(
             Path(folder), entity, registered_entities)
     else:
         files = sorted(p for p in Path(folder).rglob("*")
@@ -101,22 +103,32 @@ def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=()
         raise ValueError("No LAS/LAZ files under Input/point_cloud")
     if not pdal_exe:
         raise RuntimeError("PDAL required to inspect LiDAR footprints")
-    from modules.process_lidar import bbox_from_obj, crs_from_json
+    from modules.process_lidar import pdal_summary, horizontal_crs, vertical_crs, crs_short_label
     footprints = []
-    for p in files:
-        output = subprocess.run([str(pdal_exe), "info", "--summary", str(p)],
-                                capture_output=True, text=True, timeout=120)
-        if output.returncode:
-            raise RuntimeError(f"Cannot index LiDAR {p.name}: {output.stderr[-400:]}")
-        doc = json.loads(output.stdout)
-        summary = doc.get("summary", doc)
-        bounds = bbox_from_obj(summary.get("bounds", {})) or bbox_from_obj(doc.get("bounds", {}))
-        if not bounds:
-            raise ValueError(f"LiDAR extent unavailable: {p}")
-        source_crs = crs_from_json(summary.get("srs", {})) or crs_from_json(doc.get("metadata", {}))
-        if not source_crs:
-            raise ValueError(f"LiDAR CRS unavailable for coverage check: {p}")
-        footprints.append(_to_crs(box(*bounds), source_crs, crs))
+    failures = []
+    verticals = []
+    expected = horizontal_crs(crs)
+    emit(f'LiDAR coverage: entity={entity}; files={len(files)}; selection={selection_mode}; expected CRS={crs_short_label(expected)}; PDAL={pdal_exe}')
+    for i, p in enumerate(files, 1):
+        emit(f'LiDAR coverage [{i}/{len(files)}]: {p}')
+        try:
+            rec = pdal_summary(p, pdal_exe=pdal_exe, log=emit)
+            if not rec['crs_wkt']:
+                raise ValueError(f'LiDAR CRS unavailable for coverage check: {p}')
+            source_crs = CRS.from_wkt(rec['crs_wkt'])
+            if not horizontal_crs(source_crs).equals(expected):
+                raise ValueError(f'LiDAR horizontal CRS mismatch: {p}; actual={crs_short_label(horizontal_crs(source_crs))}; expected={crs_short_label(expected)}')
+            verticals.append(vertical_crs(source_crs))
+            footprints.append(_to_crs(box(*rec['bounds']), source_crs, crs))
+        except Exception as exc:
+            failures.append(f'{p}: {type(exc).__name__}: {exc}')
+            emit(f'ERROR: {failures[-1]}')
+    emit(f'LiDAR coverage header results: {len(footprints)}/{len(files)} passed; {len(failures)} failed')
+    if failures:
+        raise ValueError(f'{len(failures)}/{len(files)} LiDAR header checks failed. First: {failures[0]}. See full Activity Log for all failures.')
+    if verticals and any(v is not None for v in verticals):
+        if any(v is None for v in verticals) or any(not v.equals(verticals[0]) for v in verticals if v is not None and verticals[0] is not None):
+            raise ValueError('Source LAS/LAZ have inconsistent or missing vertical CRS; standardise headers before processing.')
     return unary_union(footprints), len(files)
 
 
@@ -126,7 +138,7 @@ def _coverage(subject, footprint):
     return float(subject.intersection(footprint).area / subject.area)
 
 
-def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
+def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None, log=None,
                       segments_root=Path(r"W:\\APPS\\PIT\\ATCO\\segments\\circuit")):
     """Return verified candidates and spatial-coverage notes.
 
@@ -134,8 +146,11 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
     of a registered area, or a full circuit matching the central polygon.
     Nothing is selected automatically if validation finds no candidates.
     """
+    emit = log or (lambda line: None)
+    emit(f"Coverage scan: registry={db}; products={products}; mapped={mapped}")
     inputs = _read_input_polygons(Path(mapped["aoi"]))
     registered = _registered(db)
+    emit(f"Coverage scan: {len(inputs)} local AOI files; {len(registered)} registered entities")
     needs_image = any(p in products for p in ("TIFF", "ECW"))
     needs_cloud = any(p in products for p in ("LAZ", "zLAS"))
     cache = {}
@@ -151,6 +166,7 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
         input_cov = _coverage(geom, footprint)
         if input_cov < MIN_AREA_COVERAGE:
             continue
+        emit(f"Coverage candidate: {row['entity']} {row['revision']}; AOI coverage={input_cov:.3%}; CRS={row['crs'].to_string()}")
         local_source = None
         if row["kind"] == "circuit":
             # Existing circuit pipeline validates source against the exact
@@ -173,8 +189,10 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
             key = ("image", row["crs"].to_wkt())
             if key not in cache:
                 cache[key] = _image_footprints(mapped.get("orthos"), row["crs"])
-            if _coverage(geom, cache[key][0]) < MIN_AREA_COVERAGE:
-                excluded.append((row["entity"], "insufficient imagery footprint coverage"))
+            image_cov = _coverage(geom, cache[key][0])
+            emit(f"Imagery coverage {row['entity']}: {image_cov:.3%} ({cache[key][1]} files)")
+            if image_cov < MIN_AREA_COVERAGE:
+                excluded.append((row["entity"], f"insufficient imagery footprint coverage ({image_cov:.3%}; requires 99%)"))
                 continue
         if needs_cloud:
             key = ("cloud", row["crs"].to_wkt(), row["entity"])
@@ -183,13 +201,16 @@ def discover_eligible(mapped, products, *, db=DEFAULT_DB, pdal_exe=None,
                     cache[key] = _cloud_footprints(
                         mapped.get("point_cloud"), row["crs"], pdal_exe,
                         entity=row["entity"],
-                        registered_entities=[r["entity"] for r in registered])
+                        registered_entities=[r["entity"] for r in registered], log=emit)
                 except ValueError as exc:
                     excluded.append((row["entity"], str(exc)))
                     continue
-            if _coverage(geom, cache[key][0]) < MIN_AREA_COVERAGE:
-                excluded.append((row["entity"], "insufficient LiDAR footprint coverage"))
+            cloud_cov = _coverage(geom, cache[key][0])
+            emit(f"LiDAR footprint coverage {row['entity']}: {cloud_cov:.3%} ({cache[key][1]} files)")
+            if cloud_cov < MIN_AREA_COVERAGE:
+                excluded.append((row["entity"], f"insufficient LiDAR footprint coverage ({cloud_cov:.3%}; requires 99%)"))
                 continue
+        emit(f"Coverage PASS: {row['entity']}")
         qualified.append(dict(
             kind=row["kind"], entity=row["entity"], revision=row["revision"],
             has_segments=row["kind"] == "circuit",
