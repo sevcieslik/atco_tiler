@@ -296,26 +296,39 @@ def source_clouds(folder: Path):
 
 
 def crs_from_json(obj):
+    """Read explicit PDAL CRS fields, including string and PROJJSON forms."""
+    if isinstance(obj, str) and obj.strip():
+        try:
+            return CRS.from_user_input(obj)
+        except Exception:
+            return None
     if isinstance(obj, dict):
-        for key in ('compoundwkt', 'wkt', 'horizontal', 'spatialreference', 'proj4'):
-            val = obj.get(key)
-            if isinstance(val, str) and val.strip():
-                try:
-                    return CRS.from_user_input(val)
-                except Exception:
-                    pass
+        if obj.get('type') in ('ProjectedCRS', 'CompoundCRS', 'GeographicCRS',
+                               'GeodeticCRS', 'BoundCRS'):
+            try:
+                return CRS.from_json_dict(obj)
+            except Exception:
+                pass
+        for key in ('compoundwkt', 'wkt', 'spatialreference', 'comp_spatialreference',
+                    'srs', 'horizontal', 'prettywkt', 'proj4', 'projjson', 'coordinate_system'):
+            if key in obj:
+                got = crs_from_json(obj[key])
+                if got is not None:
+                    return got
+        # Recurse into containers only; filenames and unrelated numeric
+        # metadata must not accidentally be interpreted as CRS definitions.
         for value in obj.values():
-            got = crs_from_json(value)
-            if got:
-                return got
+            if isinstance(value, (dict, list)):
+                got = crs_from_json(value)
+                if got is not None:
+                    return got
     elif isinstance(obj, list):
         for value in obj:
-            got = crs_from_json(value)
-            if got:
-                return got
+            if isinstance(value, (dict, list)):
+                got = crs_from_json(value)
+                if got is not None:
+                    return got
     return None
-
-
 
 
 def horizontal_crs(crs):
@@ -359,18 +372,61 @@ def bbox_from_obj(obj):
     return None
 
 
-def pdal_summary(path: Path):
-    data = json.loads(run(['pdal', 'info', '--summary', str(path)]).stdout)
+def pdal_summary(path: Path, *, pdal_exe=None, log=None):
+    """Shared header inspection for preflight and processing; no CRS guessing."""
+    import time
+    path = Path(path)
+    emit = log or (lambda line: print(line, flush=True))
+    exe = str(pdal_exe or shutil.which('pdal') or 'pdal')
+    docs = []
+    def inspect(option):
+        cmd = [exe, 'info', option, str(path)]
+        started = time.monotonic()
+        emit(f'LiDAR header: {option} {path}')
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    errors='replace', timeout=120,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            emit(f'ERROR: PDAL header command failed: {cmd!r}: {exc}')
+            raise RuntimeError(f'PDAL {option} failed for {path}: {exc}') from exc
+        emit(f'PDAL {option}: exit={result.returncode}, elapsed={time.monotonic()-started:.1f}s')
+        if result.stderr.strip():
+            emit(f'PDAL stderr ({path.name}, {option}): {result.stderr.strip()}')
+        if result.returncode:
+            emit(f'PDAL stdout ({path.name}, {option}): {result.stdout}')
+            raise RuntimeError(f'PDAL {option} failed for {path}: exit {result.returncode}')
+        try:
+            doc = json.loads(result.stdout)
+        except ValueError as exc:
+            emit(f'Invalid PDAL JSON ({path.name}, {option}): {result.stdout}')
+            raise RuntimeError(f'Invalid PDAL JSON for {path}: {exc}') from exc
+        docs.append((option, doc))
+        return doc
+
+    data = inspect('--summary')
     summary = data.get('summary', data)
     bounds = bbox_from_obj(summary.get('bounds', {})) or bbox_from_obj(data.get('bounds', {}))
+    source_crs = crs_from_json(summary) or crs_from_json(data)
+    if not bounds or source_crs is None:
+        emit(f'LiDAR header fallback: {path.name}; bounds={bounds}; CRS={source_crs is not None}')
+        meta = inspect('--metadata')
+        bounds = bounds or bbox_from_obj(meta)
+        source_crs = source_crs or crs_from_json(meta)
+    if not bounds or source_crs is None:
+        for option, doc in docs:
+            emit(f'PDAL diagnostic JSON ({path.name}, {option}): {json.dumps(doc, ensure_ascii=False)}')
     if not bounds:
-        raise ValueError(f'PDAL returned no bounds for {path.name}')
-    source_crs = crs_from_json(summary.get('srs', {})) or crs_from_json(data.get('metadata', {}))
+        raise ValueError(f'LiDAR extent unavailable: {path}')
+    if source_crs is None:
+        emit(f'WARNING: LiDAR CRS unavailable after summary and metadata inspection: {path}')
+    else:
+        emit(f'LiDAR header OK: {path.name}; CRS={crs_short_label(source_crs)}; bounds={bounds}')
     return {
         'path': str(path),
         'name': path.name,
         'bounds': list(bounds),
-        'crs_wkt': source_crs.to_wkt() if source_crs else None,
+        'crs_wkt': source_crs.to_wkt() if source_crs is not None else None,
         'size': path.stat().st_size,
         'mtime_ns': path.stat().st_mtime_ns,
     }
@@ -386,7 +442,7 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
     if cache.is_file():
         try:
             saved = json.loads(cache.read_text(encoding='utf-8'))
-            if saved.get('fingerprint') == fp:
+            if saved.get('fingerprint') == fp and saved.get('crs', {}).get('expected_horizontal_wkt') == horizontal_crs(expected_crs).to_wkt():
                 rows = saved['files']
                 meta = saved.get('crs') or {}
                 if meta.get('output_crs_wkt'):
@@ -461,6 +517,7 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
         output_crs = expected_horizontal
 
     rows_meta = {
+        'expected_horizontal_wkt': expected_horizontal.to_wkt(),
         'horizontal_crs': crs_short_label(expected_horizontal),
         'vertical_crs': crs_short_label(verticals[0]) if verticals and verticals[0] is not None else None,
         'output_crs_wkt': output_crs.to_wkt(),
