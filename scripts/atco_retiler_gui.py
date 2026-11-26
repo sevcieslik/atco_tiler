@@ -1899,9 +1899,10 @@ class RetilerApp(tk.Tk):
         mapped = dict(self.mapped)
         threading.Thread(
             target=self._eligibility_worker,
-            args=(mapped, list(selected)), daemon=True).start()
+            args=(mapped, list(selected), Path(self.output_root),
+                  int(self.cfg.get("parallel_workers", self.cfg.get("ecw_workers", 2)))), daemon=True).start()
 
-    def _eligibility_worker(self, mapped, selected):
+    def _eligibility_worker(self, mapped, selected, output_root, workers):
         try:
             from input_eligibility import discover_eligible
             pdal_exe = None
@@ -1923,8 +1924,8 @@ class RetilerApp(tk.Tk):
                 self.log_queue.put(("LINE", f"PDAL version: {version.stdout.strip()}; exit={version.returncode}; stderr={version.stderr.strip()}"))
             started = time.monotonic()
             eligible, excluded = discover_eligible(
-                mapped, selected, pdal_exe=pdal_exe,
-                log=lambda line: self.log_queue.put(("LINE", line)))
+                mapped, selected, pdal_exe=pdal_exe, output_root=output_root,
+                workers=workers, log=lambda line: self.log_queue.put(("LINE", line)))
             self.log_queue.put(("LINE", f"Coverage scan finished in {time.monotonic()-started:.1f}s"))
             self.log_queue.put(("ELIGIBLE", (eligible, excluded)))
         except Exception as exc:
