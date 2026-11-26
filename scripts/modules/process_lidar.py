@@ -398,11 +398,72 @@ def bbox_from_obj(obj):
     return None
 
 
-def pdal_summary(path: Path, *, pdal_exe=None, log=None):
+def fast_terrascan_header(path: Path):
+    """Read only a narrowly recognised TerraScan LAS 1.4 header.
+
+    Accept no projection VLRs, no EVLRs, and only the standard LASzip VLR.
+    All other layouts, including files with CRS, use PDAL. Never read points.
+    """
+    import math
+    import struct
+    path = Path(path)
+    try:
+        with path.open('rb') as f:
+            stat = os.fstat(f.fileno())
+            h = f.read(375)
+            if len(h) != 375 or h[:4] != b'LASF' or h[24:26] != bytes((1, 4)):
+                return None
+            if h[58:90].split(b'\x00', 1)[0].strip().lower() != b'terrascan':
+                return None
+            header_size, data_offset, vlr_count = struct.unpack_from('<HII', h, 94)
+            point_format = h[104] & 0x3f
+            point_count = struct.unpack_from('<Q', h, 247)[0]
+            evlr_offset, evlr_count = struct.unpack_from('<QI', h, 235)
+            if (header_size != 375 or not header_size <= data_offset < stat.st_size
+                    or point_format not in (6, 7, 8, 9, 10) or not point_count
+                    or evlr_offset or evlr_count or vlr_count > 1):
+                return None
+            if struct.unpack_from('<H', h, 6)[0] & 16:
+                return None
+            f.seek(header_size)
+            for _ in range(vlr_count):
+                v = f.read(54)
+                if len(v) != 54:
+                    return None
+                uid = v[2:18].split(b'\x00', 1)[0].strip().lower()
+                record_id, length = struct.unpack_from('<HH', v, 18)
+                if uid != b'laszip encoded' or record_id != 22204:
+                    return None
+                if f.tell() + length > data_offset:
+                    return None
+                f.seek(length, 1)
+            if f.tell() != data_offset:
+                return None
+            if path.suffix.lower() == '.laz' and vlr_count != 1:
+                return None
+            maxx, minx, maxy, miny, maxz, minz = struct.unpack_from('<6d', h, 179)
+            scales = struct.unpack_from('<3d', h, 131)
+            if not all(math.isfinite(v) for v in (minx, miny, minz, maxx, maxy, maxz, *scales)):
+                return None
+            if minx > maxx or miny > maxy or minz > maxz or any(v <= 0 for v in scales):
+                return None
+            return {'path': str(path), 'name': path.name,
+                    'bounds': [minx, miny, maxx, maxy], 'crs_wkt': None,
+                    'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns,
+                    'header_reader': 'TerraScan LAS 1.4 binary (no CRS)'}
+    except (OSError, ValueError, struct.error):
+        return None
+
+
+def pdal_summary(path: Path, *, pdal_exe=None, log=None, fast_missing=False):
     """Shared header inspection for preflight and processing; no CRS guessing."""
     import time
     path = Path(path)
     emit = log or (lambda line: print(line, flush=True))
+    if fast_missing:
+        fast = fast_terrascan_header(path)
+        if fast is not None:
+            return fast
     exe = str(pdal_exe or shutil.which('pdal') or 'pdal')
     docs = []
     def inspect(option):
@@ -434,7 +495,11 @@ def pdal_summary(path: Path, *, pdal_exe=None, log=None):
     summary = data.get('summary', data)
     bounds = bbox_from_obj(summary.get('bounds', {})) or bbox_from_obj(data.get('bounds', {}))
     source_crs = crs_from_json(summary) or crs_from_json(data)
-    if not bounds or source_crs is None:
+    header_meta = summary.get('metadata', {})
+    complete_blank = (isinstance(header_meta, dict) and isinstance(header_meta.get('srs'), dict)
+                      and 'spatialreference' in header_meta and 'comp_spatialreference' in header_meta
+                      and not has_explicit_crs_metadata(data))
+    if not bounds or (source_crs is None and not complete_blank):
         emit(f'LiDAR header fallback: {path.name}; bounds={bounds}; CRS={source_crs is not None}')
         meta = inspect('--metadata')
         bounds = bounds or bbox_from_obj(meta)
@@ -458,6 +523,7 @@ def pdal_summary(path: Path, *, pdal_exe=None, log=None):
         'crs_wkt': source_crs.to_wkt() if source_crs is not None else None,
         'size': path.stat().st_size,
         'mtime_ns': path.stat().st_mtime_ns,
+        'header_reader': 'PDAL',
     }
 
 
@@ -493,47 +559,69 @@ def cache_fingerprint(files):
     return [{'path': str(p), 'size': p.stat().st_size, 'mtime_ns': p.stat().st_mtime_ns} for p in files]
 
 
-def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
-    cache = qa_dir / 'source_inventory.json'
+def cloud_inventory(files, expected_crs: CRS, qa_dir: Path | None, *, pdal_exe=None, log=None, workers=None):
+    import time
+    emit = log or (lambda line: print(line))
+    started = time.monotonic()
+    files = sorted((Path(p) for p in files), key=lambda p: str(p).casefold())
+    if not files:
+        raise ValueError('No source LAS/LAZ files')
+    cache = qa_dir / 'source_inventory.json' if qa_dir is not None else None
     fp = cache_fingerprint(files)
-    if cache.is_file():
+    if cache is not None and cache.is_file():
         try:
             saved = json.loads(cache.read_text(encoding='utf-8'))
             if (saved.get('fingerprint') == fp and saved.get('crs', {}).get('expected_horizontal_wkt') == horizontal_crs(expected_crs).to_wkt()
-                    and saved.get('crs', {}).get('header_policy') == 'assign_missing_only_v1'):
+                    and saved.get('crs', {}).get('header_policy') == 'assign_missing_only_v2'):
                 rows = saved['files']
                 meta = saved.get('crs') or {}
                 if meta.get('output_crs_wkt'):
                     output_crs = CRS.from_wkt(meta['output_crs_wkt'])
-                    print(f'Using cached point-cloud inventory: {len(rows)} files', flush=True)
+                    emit(f'Using cached point-cloud inventory: {len(rows)} files | elapsed={time.monotonic()-started:.1f}s')
                     if meta.get('horizontal_crs'):
-                        print(f'  Horizontal CRS: {meta["horizontal_crs"]}', flush=True)
+                        emit(f'  Horizontal CRS: {meta["horizontal_crs"]}')
                     if meta.get('vertical_crs'):
-                        print(f'  Vertical CRS  : {meta["vertical_crs"]} (preserved in output LAZ/LAS)', flush=True)
+                        emit(f'  Vertical CRS  : {meta["vertical_crs"]} (preserved in output LAZ/LAS)')
                     return rows, output_crs, meta
         except Exception:
             pass
 
-    workers = resolve_parallel_workers(configured_parallel_workers(), len(files))
-    rows = []
-    print(f'Indexing {len(files)} LAS/LAZ source file(s) with {workers} worker(s)...', flush=True)
+    workers = min(8, resolve_parallel_workers(configured_parallel_workers() if workers is None else workers, len(files)))
+    rows, failures = [], []
+    emit(f'Indexing {len(files)} LAS/LAZ source file(s) with {workers} worker(s)...')
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(pdal_summary, p): p for p in files}
+        futs = {ex.submit(pdal_summary, p, pdal_exe=pdal_exe, log=emit, fast_missing=True): p for p in files}
         for i, fut in enumerate(as_completed(futs), 1):
             p = futs[fut]
             try:
                 rows.append(fut.result())
             except Exception as exc:
-                raise RuntimeError(f'Failed to inspect {p}: {exc}') from exc
-            if i % 100 == 0 or i == len(files):
-                print(f'  Indexed {i}/{len(files)}', flush=True)
+                failures.append(f'{p}: {type(exc).__name__}: {exc}')
+                emit(f'ERROR: {failures[-1]}')
+            if i % 25 == 0 or i == len(files):
+                emit(f'  Indexed {i}/{len(files)} | elapsed={time.monotonic()-started:.1f}s')
+    if failures:
+        raise ValueError(f'{len(failures)}/{len(files)} LiDAR header checks failed. First: {failures[0]}. See Activity Log.')
     rows.sort(key=lambda r: r['path'].casefold())
+    fast_count = sum(r.get('header_reader', '').startswith('TerraScan') for r in rows)
+    emit(f'Header scan: {fast_count} binary TerraScan; {len(rows)-fast_count} PDAL; elapsed={time.monotonic()-started:.1f}s')
 
     expected_horizontal = horizontal_crs(expected_crs)
     mismatched = []
     source_crs_objects = []
+    parsed = {}
+    assigned = None
     for r in rows:
-        src = effective_source_crs(r, expected_crs)
+        wkt = r.get('crs_wkt')
+        if wkt is None:
+            if assigned is None:
+                assigned = missing_source_crs(expected_crs)
+            r['assigned_crs_wkt'] = assigned.to_wkt()
+            src = assigned
+        else:
+            if wkt not in parsed:
+                parsed[wkt] = CRS.from_wkt(wkt)
+            src = parsed[wkt]
         source_crs_objects.append(src)
         if not horizontal_crs(src).equals(expected_horizontal):
             mismatched.append((r['name'], crs_short_label(horizontal_crs(src)), src.to_string()))
@@ -570,18 +658,33 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
 
     rows_meta = {
         'expected_horizontal_wkt': expected_horizontal.to_wkt(),
-        'header_policy': 'assign_missing_only_v1',
+        'header_policy': 'assign_missing_only_v2',
         'assigned_missing_crs_files': [r['name'] for r in rows if r.get('assigned_crs_wkt')],
         'horizontal_crs': crs_short_label(expected_horizontal),
         'vertical_crs': crs_short_label(verticals[0]) if verticals and verticals[0] is not None else None,
         'output_crs_wkt': output_crs.to_wkt(),
     }
-    print(f'  Horizontal CRS: {rows_meta["horizontal_crs"]}', flush=True)
+    emit(f'  Horizontal CRS: {rows_meta["horizontal_crs"]}')
     if rows_meta['vertical_crs']:
-        print(f'  Vertical CRS  : {rows_meta["vertical_crs"]} (preserved in output LAZ/LAS)', flush=True)
+        emit(f'  Vertical CRS  : {rows_meta["vertical_crs"]} (preserved in output LAZ/LAS)')
 
-    qa_dir.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({'fingerprint': fp, 'files': rows, 'crs': rows_meta}, indent=2), encoding='utf-8')
+    emit(f'Missing source CRS: {len(rows_meta["assigned_missing_crs_files"])}/{len(rows)}; assign AOI + CGVD2013 on LiDAR export only; source files unchanged')
+    if cache_fingerprint(files) != fp:
+        raise ValueError('Source LAS/LAZ changed during header inspection; validate again.')
+    if cache is not None:
+        try:
+            qa_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=qa_dir, delete=False) as f:
+                tmp = Path(f.name)
+                json.dump({'fingerprint': fp, 'files': rows, 'crs': rows_meta}, f)
+            try:
+                os.replace(tmp, cache)
+            finally:
+                tmp.unlink(missing_ok=True)
+            emit(f'Inventory cache saved: {cache}')
+        except OSError as exc:
+            emit(f'WARNING: could not save inventory cache: {exc}')
+    emit(f'LiDAR inventory complete: {len(rows)} files; elapsed={time.monotonic()-started:.1f}s')
     return rows, output_crs, rows_meta
 
 
