@@ -297,7 +297,7 @@ def source_clouds(folder: Path):
 
 def crs_from_json(obj):
     """Read explicit PDAL CRS fields, including string and PROJJSON forms."""
-    if isinstance(obj, str) and obj.strip():
+    if isinstance(obj, str) and obj.strip().casefold() not in ('', 'unknown', 'undefined', 'none', 'null'):
         try:
             return CRS.from_user_input(obj)
         except Exception:
@@ -561,7 +561,7 @@ def cache_fingerprint(files):
 
 def cloud_inventory(files, expected_crs: CRS, qa_dir: Path | None, *, pdal_exe=None, log=None, workers=None):
     import time
-    emit = log or (lambda line: print(line))
+    emit = log or (lambda line: print(line, flush=True))
     started = time.monotonic()
     files = sorted((Path(p) for p in files), key=lambda p: str(p).casefold())
     if not files:
@@ -611,20 +611,27 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path | None, *, pdal_exe=N
     source_crs_objects = []
     parsed = {}
     assigned = None
+    assigned_wkt = None
+    components = {}
     for r in rows:
         wkt = r.get('crs_wkt')
         if wkt is None:
             if assigned is None:
                 assigned = missing_source_crs(expected_crs)
-            r['assigned_crs_wkt'] = assigned.to_wkt()
+                assigned_wkt = assigned.to_wkt()
+            r['assigned_crs_wkt'] = assigned_wkt
             src = assigned
         else:
             if wkt not in parsed:
                 parsed[wkt] = CRS.from_wkt(wkt)
             src = parsed[wkt]
         source_crs_objects.append(src)
-        if not horizontal_crs(src).equals(expected_horizontal):
-            mismatched.append((r['name'], crs_short_label(horizontal_crs(src)), src.to_string()))
+        if id(src) not in components:
+            hcrs = horizontal_crs(src)
+            components[id(src)] = (hcrs, vertical_crs(src), hcrs.equals(expected_horizontal))
+        hcrs, _, matches = components[id(src)]
+        if not matches:
+            mismatched.append((r['name'], crs_short_label(hcrs), src.to_string()))
     if mismatched:
         sample = ', '.join(f'{n}={h}' for n, h, _ in mismatched[:5])
         raise ValueError(
@@ -634,7 +641,7 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path | None, *, pdal_exe=N
 
     # Preserve the source vertical datum in output LAS/LAZ. A compound CRS such as
     # EPSG:2956 + CGVD2013 is valid when its horizontal component matches the AOI.
-    verticals = [vertical_crs(c) for c in source_crs_objects]
+    verticals = [components[id(c)][1] for c in source_crs_objects]
     has_vertical = [v is not None for v in verticals]
     if any(has_vertical) and not all(has_vertical):
         raise ValueError(
@@ -645,7 +652,7 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path | None, *, pdal_exe=N
         first_vertical = verticals[0]
         inconsistent_vertical = []
         for r, v in zip(rows, verticals):
-            if not v.equals(first_vertical):
+            if v is not first_vertical and not v.equals(first_vertical):
                 inconsistent_vertical.append((r['name'], crs_short_label(v)))
         if inconsistent_vertical:
             sample = ', '.join(f'{n}={v}' for n, v in inconsistent_vertical[:5])
