@@ -103,7 +103,7 @@ def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=()
         raise ValueError("No LAS/LAZ files under Input/point_cloud")
     if not pdal_exe:
         raise RuntimeError("PDAL required to inspect LiDAR footprints")
-    from modules.process_lidar import pdal_summary, horizontal_crs, vertical_crs, crs_short_label
+    from modules.process_lidar import pdal_summary, horizontal_crs, vertical_crs, crs_short_label, effective_source_crs
     footprints = []
     failures = []
     verticals = []
@@ -113,9 +113,7 @@ def _cloud_footprints(folder, crs, pdal_exe, entity=None, registered_entities=()
         emit(f'LiDAR coverage [{i}/{len(files)}]: {p}')
         try:
             rec = pdal_summary(p, pdal_exe=pdal_exe, log=emit)
-            if not rec['crs_wkt']:
-                raise ValueError(f'LiDAR CRS unavailable for coverage check: {p}')
-            source_crs = CRS.from_wkt(rec['crs_wkt'])
+            source_crs = effective_source_crs(rec, crs, log=emit)
             if not horizontal_crs(source_crs).equals(expected):
                 raise ValueError(f'LiDAR horizontal CRS mismatch: {p}; actual={crs_short_label(horizontal_crs(source_crs))}; expected={crs_short_label(expected)}')
             verticals.append(vertical_crs(source_crs))
