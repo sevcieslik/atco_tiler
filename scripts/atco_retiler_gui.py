@@ -9,6 +9,7 @@ import subprocess
 import shutil
 import sys
 import threading
+import traceback
 import time
 import tkinter as tk
 from pathlib import Path
@@ -249,6 +250,8 @@ class RetilerApp(tk.Tk):
         self.stop_requested = False
         self.suspended_pids = []
         self.log_queue = queue.Queue()
+        self.session_log_path = None
+        self.session_log_error = None
         self.session_created = {k: 0 for k in ("TIFF","ECW","LAZ","zLAS","Tile Index")}
         self.build_mode = "Idle"
         self.current_stage = "Idle"
@@ -268,6 +271,7 @@ class RetilerApp(tk.Tk):
         self._configure_styles()
         self._build_shell()
         self._show_page("Build")
+        self._init_session_log()
         self.after(150, self._drain_log_queue)
         self.after(400, self.refresh_mapping)
         self.after(1500, self._status_tick)
@@ -730,6 +734,8 @@ class RetilerApp(tk.Tk):
         head.pack(fill="x", padx=20, pady=(18, 10))
         tk.Label(head, text="Activity Log", bg=BG, fg=TEXT,
                  font=("Segoe UI", 18, "bold")).pack(side="left")
+        tk.Button(head, text="Open log folder", command=self.open_log_folder,
+                  bg=ROW_BG, fg=TEXT, relief="flat", padx=14, pady=8).pack(side="right", padx=6)
         tk.Button(head, text="Clear", command=self.clear_log,
                   bg=ROW_BG, fg=TEXT, relief="flat", padx=14, pady=8).pack(side="right")
         box = tk.Frame(page, bg=LOG_BG, highlightthickness=1,
@@ -1481,13 +1487,16 @@ class RetilerApp(tk.Tk):
             if self.stop_requested:
                 self.log_queue.put(("STOP", "Processing stopped by operator"))
             else:
+                self.log_queue.put(("LINE", traceback.format_exc()))
                 self.log_queue.put(("FAIL", str(exc)))
 
     def _run_stream(self, args, env=None):
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
+        self.log_queue.put(("LINE", f"START command: {subprocess.list2cmdline([str(a) for a in args])}"))
+        started = time.monotonic()
         self.process = subprocess.Popen(
             args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=0, env=env, creationflags=creationflags
+            text=True, errors="replace", bufsize=0, env=env, creationflags=creationflags
         )
         buf = ""
         while True:
@@ -1502,7 +1511,9 @@ class RetilerApp(tk.Tk):
                 buf = ""
             else:
                 buf += ch
-        return self.process.wait()
+        rc = self.process.wait()
+        self.log_queue.put(("LINE", f"END command: exit={rc}; elapsed={time.monotonic()-started:.1f}s"))
+        return rc
 
     def _windows_process_tree(self, root_pid):
         """Return root PID plus all descendants using Toolhelp32Snapshot."""
@@ -1725,8 +1736,37 @@ class RetilerApp(tk.Tk):
         widget.configure(text=text,bg=bg,fg=fg)
 
     # ---------- log ----------
+    def _init_session_log(self):
+        name = f"atco_session_{time.strftime('%Y%m%d_%H%M%S')}_{os.getpid()}.log"
+        for directory in (TOOL_ROOT / "logs", Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "ATCO" / "logs"):
+            try:
+                directory.mkdir(parents=True, exist_ok=True)
+                path = directory / name
+                with path.open("a", encoding="utf-8") as f:
+                    f.write("")
+                self.session_log_path = path
+                break
+            except OSError as exc:
+                self.session_log_error = str(exc)
+        self.log(f"ATCO Retiler {APP_VERSION}; commit={current_commit()}; Python={sys.version}; executable={sys.executable}")
+        self.log(f"Session log: {self.session_log_path}" if self.session_log_path else f"Cannot create session log: {self.session_log_error}", "INFO" if self.session_log_path else "WARN")
+
+    def open_log_folder(self):
+        if self.session_log_path is None:
+            messagebox.showwarning(APP_NAME, "No session log could be created.")
+            return
+        win_open(self.session_log_path.parent)
+
     def log(self, text, level="INFO"):
         stamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        if self.session_log_path is not None:
+            try:
+                with self.session_log_path.open("a", encoding="utf-8") as f:
+                    f.write(f"[{stamp}] {level:<5} {text}\n")
+            except OSError as exc:
+                self.session_log_error = str(exc)
+                self.session_log_path = None
+                text += f"\nWARNING: session log write failed: {exc}"
         self.log_text.configure(state="normal")
         self.log_text.insert("end", f"[{stamp}] ")
         self.log_text.insert("end", f"{level:<5} ", level if level in ("INFO","WARN","ERROR") else None)
@@ -1855,6 +1895,7 @@ class RetilerApp(tk.Tk):
         self.validate_btn.configure(state="disabled", text="Checking coverage...")
         self.log("VALIDATE: indexing local AOI, image footprints, and LiDAR footprints "
                  "against central AOI revisions...", "INFO")
+        self.log(f"Validation settings: products={selected}; input={self.input_root}; output={self.output_root}; mapped={self.mapped}; workers={self.cfg.get('parallel_workers', 2)}")
         mapped = dict(self.mapped)
         threading.Thread(
             target=self._eligibility_worker,
@@ -1877,10 +1918,17 @@ class RetilerApp(tk.Tk):
                     if not pdal_ready():
                         raise RuntimeError("PDAL installation completed but PDAL is unavailable.")
                 pdal_exe = pdal_executable()
+                self.log_queue.put(("LINE", f"PDAL executable: {pdal_exe}"))
+                version = subprocess.run([str(pdal_exe), "--version"], capture_output=True, text=True, errors="replace", timeout=20)
+                self.log_queue.put(("LINE", f"PDAL version: {version.stdout.strip()}; exit={version.returncode}; stderr={version.stderr.strip()}"))
+            started = time.monotonic()
             eligible, excluded = discover_eligible(
-                mapped, selected, pdal_exe=pdal_exe)
+                mapped, selected, pdal_exe=pdal_exe,
+                log=lambda line: self.log_queue.put(("LINE", line)))
+            self.log_queue.put(("LINE", f"Coverage scan finished in {time.monotonic()-started:.1f}s"))
             self.log_queue.put(("ELIGIBLE", (eligible, excluded)))
         except Exception as exc:
+            self.log_queue.put(("LINE", traceback.format_exc()))
             self.log_queue.put(("VALIDATE_FAIL", str(exc)))
 
     def save_settings(self):
