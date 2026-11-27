@@ -2,7 +2,7 @@
 
 ## v1.08.05 (Windows UAT)
 
-- Tile Index excludes class 7, synthetic points and line 0 from GPS/line attribution in both modes; no changes to delivered points.
+- Tile Index excludes class 7, synthetic points and line 0 from GPS/line attribution in both modes. Count non-synthetic, non-noise Line 0 before filtering and report FAIL_REAL_LINE_ZERO, including ground and class counts. Synthetic Line 0 is valid. No changes to delivered points; SHP remains available for QA review.
 - Flag legacy full-flight line IDs by DDDN matching of time-overlapping published trajectory names; warning and QA CSV, no automatic renumbering or hard block.
 - Keep standalone Tile Index source-point workflow; revalidate on product selection changes.
 
