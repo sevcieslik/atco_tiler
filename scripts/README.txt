@@ -1,4 +1,4 @@
-ATCO Retiler v1.08.04 | Operator and technical documentation
+ATCO Retiler v1.08.05 | Operator and technical documentation
 =============================================================
 
 STATUS: Development branch, Windows UAT required. Stable main remains v1.07.
@@ -206,3 +206,10 @@ RELEASE HISTORY
 ---------------
 Historical v1.05-v1.06 release notes are preserved in the repository's
 CHANGELOG.md. They are not operating instructions for v1.08.
+
+TILE INDEX ATTRIBUTION (v1.08.05)
+Tile Index-only reads cropped local source LAS/LAZ; no LiDAR output is generated.
+Flightline and DX flightid use unique PointSourceId values from non-synthetic,
+non-noise points with nonzero line IDs. Dates and DX DDDYY use the trajectory index.
+Legacy full-flight IDs matching overlapping published trajectories are warnings;
+review QA/TILES/TILES_line_number_qa.csv. No point attributes are modified.
