@@ -1,5 +1,11 @@
 # ATCO Retiler – Release notes
 
+## v1.08.05 (Windows UAT)
+
+- Tile Index excludes class 7, synthetic points and line 0 from GPS/line attribution in both modes; no changes to delivered points.
+- Flag legacy full-flight line IDs by DDDN matching of time-overlapping published trajectory names; warning and QA CSV, no automatic renumbering or hard block.
+- Keep standalone Tile Index source-point workflow; revalidate on product selection changes.
+
 ## v1.08.04 (Windows UAT)
 
 - TX/DX Tile Index now uses classified LAS PointSourceId for Flightline and DX flightid. Acquisition dates and DX DDDYY remain GPS-range based. No point attribute edits or new line-number QA.
