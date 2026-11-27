@@ -29,7 +29,7 @@ import atco_processor as core
 from atco_delivery import product_folder, is_tx
 
 APP_NAME = "ATCO Retiler"
-APP_VERSION = "1.08.04"
+APP_VERSION = "1.08.05"
 
 
 def current_commit():
@@ -808,12 +808,10 @@ class RetilerApp(tk.Tk):
             self._invalidate_input_validation()
             self._sync_product_selection()
             return
-        if self.input_validated and changed != "Tile Index":
-            # Imagery/LiDAR changes alter the source coverage requirements.
+        if self.input_validated:
+            # Tile Index also reads source points; every product change can alter coverage requirements.
             self._invalidate_input_validation()
         else:
-            # Tile Index is geometry-only for a validated circuit. Toggling it
-            # must not discard eligible entities or source coverage results.
             self._sync_product_selection()
 
     # ---------- Mapping page ----------
