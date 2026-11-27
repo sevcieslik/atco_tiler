@@ -748,24 +748,58 @@ def _find_stats_dimension(obj, dimension='GpsTime'):
     return None
 
 
+def line_zero_by_class(data):
+    """Read the single expressionstats result, including a valid empty result."""
+    def find_stage(obj):
+        if isinstance(obj, dict):
+            if str(obj.get('dimension', '')).casefold() == 'classification':
+                return obj
+            for value in obj.values():
+                found = find_stage(value)
+                if found is not None:
+                    return found
+        elif isinstance(obj, list):
+            for value in obj:
+                found = find_stage(value)
+                if found is not None:
+                    return found
+        return None
+    stage = find_stage(data)
+    if stage is None:
+        raise ValueError('PDAL metadata missing Line 0 classification statistics')
+    stats = stage.get('statistic', [])
+    if isinstance(stats, dict):
+        stats = [stats]
+    if not stats:
+        return {}
+    if len(stats) != 1 or 'expression' not in stats[0]:
+        raise ValueError('Unexpected Line 0 expression statistics')
+    bins = stats[0].get('bins', [])
+    if isinstance(bins, dict):
+        bins = [bins]
+    return {int(float(b['value'])): int(b['count']) for b in bins if int(b['count']) > 0}
+
+
 def tile_point_evidence(data):
-    """Parse GPS range and actual unique LAS point source IDs from PDAL stats."""
+    """Parse GPS range, classified strip IDs and non-synthetic Line 0 counts."""
+    zero_classes = line_zero_by_class(data)
     gps = _find_stats_dimension(data, 'GpsTime')
     ids = _find_stats_dimension(data, 'PointSourceId')
     rng = None
     if gps and int(gps.get('count', 0)) > 0:
         rng = (float(gps['minimum']), float(gps['maximum']))
     if not ids or int(ids.get('count', 0)) == 0:
-        return rng, ()
+        return rng, (), zero_classes
     values = ids.get('values')
     if values is None:
         raise ValueError('PDAL PointSourceId statistics did not include enumerated values')
     if not isinstance(values, list):
         values = [values]
-    return rng, tuple(sorted({int(v) for v in values if int(v) != 0}))
+    return rng, tuple(sorted({int(v) for v in values if int(v) != 0})), zero_classes
 
 
 TILE_EVIDENCE_FILTER = 'Classification != 7 && Synthetic == 0 && PointSourceId != 0'
+LINE_ZERO_QA_EXPRESSION = 'Classification != 7 && Synthetic == 0 && PointSourceId == 0'
 
 
 def scan_tile_evidence(stages, endpoint):
@@ -774,7 +808,10 @@ def scan_tile_evidence(stages, endpoint):
         tmp = Path(tmp)
         manifest, metadata = tmp / 'pipeline.json', tmp / 'metadata.json'
         pipeline = list(stages) + [
-            {'type': 'filters.expression', 'inputs': [endpoint],
+            {'type': 'filters.expressionstats', 'inputs': [endpoint],
+             'dimension': 'Classification', 'expressions': [LINE_ZERO_QA_EXPRESSION],
+             'tag': 'line_zero_qa'},
+            {'type': 'filters.expression', 'inputs': ['line_zero_qa'],
              'expression': TILE_EVIDENCE_FILTER, 'tag': 'flight_evidence'},
             {'type': 'filters.stats', 'inputs': ['flight_evidence'],
              'dimensions': 'GpsTime,PointSourceId', 'enumerate': 'PointSourceId', 'tag': 'gps_stats'},
@@ -820,7 +857,7 @@ def trajectory_attributes(laz_path: Path, trajectory_index):
 
 
 def trajectory_attributes_from_evidence(evidence, trajectory_index, label):
-    rng, line_ids = evidence
+    rng, line_ids, _zero_classes = evidence
     # Preserve classified real-point IDs; zero is not a flight strip.
     lines = ', '.join(str(v) for v in line_ids if v != 0)
     dates, julian = '', None
@@ -844,7 +881,7 @@ def trajectory_attributes_from_evidence(evidence, trajectory_index, label):
 def source_segment_point_evidence(seg_row, chosen, crs):
     """Read actual point IDs and GPS time inside a segment, without LAS export."""
     if not chosen:
-        return None, ()
+        return None, (), {}
     stages = pipeline_for_segment(seg_row, chosen, Path('unused.laz'), None, crs)['pipeline'][:-1]
     return scan_tile_evidence(stages, 'clean')
 
@@ -856,7 +893,7 @@ def legacy_trajectory_matches(evidence, trajectory_index):
     Use only time-overlapping published trajectories. A match is evidence
     for review, not proof of incorrect classification.
     """
-    rng, ids = evidence
+    rng, ids, _zero_classes = evidence
     if not rng or not ids:
         return []
     lo, hi = rng
@@ -941,10 +978,21 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
             evidence_by_tile[name] = evidence
         fldate, flightline, julian = trajectory_attributes_from_evidence(evidence, trajectory_index, name)
         matches = legacy_trajectory_matches(evidence, trajectory_index)
-        status = 'REVIEW_LEGACY_FLIGHT_ID' if matches else ('NO_LINE_EVIDENCE' if not evidence[1] else 'NO_LEGACY_MATCH')
+        zero_classes = evidence[2]
+        zero_count = sum(zero_classes.values())
+        ground_zero = zero_classes.get(2, 0)
+        status = ('FAIL_REAL_LINE_ZERO' if zero_count else
+                  'REVIEW_LEGACY_FLIGHT_ID' if matches else
+                  'NO_LINE_EVIDENCE' if not evidence[1] else 'NO_LEGACY_MATCH')
         line_qa.append({'NAME': name, 'PointSourceIds': flightline, 'status': status,
+                        'real_line_zero_points': zero_count, 'ground_line_zero_points': ground_zero,
+                        'real_line_zero_by_class': json.dumps(zero_classes, sort_keys=True),
+                        'legacy_flight_match': bool(matches),
                         'matched_line_ids': ', '.join(str(v) for v in sorted({i for i, _ in matches})),
                         'matched_trajectories': ', '.join(n for _, n in matches)})
+        if zero_count:
+            print(f'ERROR: {name}: {zero_count} non-synthetic points have Line 0 '
+                  f'(ground={ground_zero}; by class={zero_classes}); classification must correct Deduce Time.', flush=True)
         if matches:
             print(f'WARNING: {name}: possible unsplit flight numbering: {matches}', flush=True)
         if tx:
@@ -975,8 +1023,13 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     qa = base / 'QA' / 'TILES'
     qa.mkdir(parents=True, exist_ok=True)
     pd.DataFrame(line_qa).to_csv(qa / 'TILES_line_number_qa.csv', index=False, encoding='utf-8-sig')
-    legacy_count = sum(r['status'] == 'REVIEW_LEGACY_FLIGHT_ID' for r in line_qa)
-    print(f'Tile Index line numbering: {legacy_count}/{len(line_qa)} tiles flagged for review; see TILES_line_number_qa.csv', flush=True)
+    legacy_count = sum(r['legacy_flight_match'] for r in line_qa)
+    zero_fail_count = sum(r['real_line_zero_points'] > 0 for r in line_qa)
+    zero_total = sum(r['real_line_zero_points'] for r in line_qa)
+    ground_zero_total = sum(r['ground_line_zero_points'] for r in line_qa)
+    print(f'Tile Index line numbering: {legacy_count}/{len(line_qa)} tiles with possible legacy IDs; '
+          f'{zero_fail_count}/{len(line_qa)} FAIL_REAL_LINE_ZERO ({zero_total} points, '
+          f'{ground_zero_total} ground); see TILES_line_number_qa.csv', flush=True)
     frame = gpd.GeoDataFrame(records, geometry='geometry', crs=seg.crs)
     if not tx:
         # Nullable 32-bit integer, including tiles without flight metadata.
@@ -1004,7 +1057,7 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     qa.mkdir(parents=True, exist_ok=True)
     frame.drop(columns='geometry').to_csv(qa / 'TILES_attributes.csv', index=False, encoding='utf-8-sig')
     if source_mode:
-        pd.DataFrame([{'NAME': name, 'gps_min': rng[0] if rng else None, 'gps_max': rng[1] if rng else None, 'PointSourceIds': ', '.join(str(v) for v in ids)} for name, (rng, ids) in evidence_by_tile.items()]).sort_values('NAME').to_csv(qa / 'TILES_source_gps.csv', index=False, encoding='utf-8-sig')
+        pd.DataFrame([{'NAME': name, 'gps_min': rng[0] if rng else None, 'gps_max': rng[1] if rng else None, 'PointSourceIds': ', '.join(str(v) for v in ids)} for name, (rng, ids, _zero_classes) in evidence_by_tile.items()]).sort_values('NAME').to_csv(qa / 'TILES_source_gps.csv', index=False, encoding='utf-8-sig')
     (qa / 'TILES_schema.json').write_text(json.dumps({
         'entity': circuit,
         'client_entity_name': client_name,
@@ -1019,6 +1072,11 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
         'trajectory_attribution': 'POINT_SOURCE_ID_LINES_GPS_RANGE_DATES',
         'flightline_source': 'LAS PointSourceId (unique nonzero real-point values, sorted)',
         'point_evidence_filter': TILE_EVIDENCE_FILTER,
+        'line_zero_qa_expression': LINE_ZERO_QA_EXPRESSION,
+        'real_line_zero_fail_tiles': zero_fail_count,
+        'real_line_zero_points': zero_total,
+        'ground_line_zero_points': ground_zero_total,
+        'line_number_qa_status': 'FAIL' if zero_fail_count else 'REVIEW' if legacy_count or missing else 'NO_LEGACY_MATCH',
         'legacy_line_number_review_tiles': legacy_count,
         'legacy_line_number_qa': str(qa / 'TILES_line_number_qa.csv'),
         'legacy_line_number_rule': 'Time-overlapping ABDDDYY_Gnnn_N trajectory -> DDDN; warning only',
