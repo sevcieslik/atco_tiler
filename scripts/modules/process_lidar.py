@@ -762,14 +762,32 @@ def tile_point_evidence(data):
         raise ValueError('PDAL PointSourceId statistics did not include enumerated values')
     if not isinstance(values, list):
         values = [values]
-    return rng, tuple(sorted({int(v) for v in values}))
+    return rng, tuple(sorted({int(v) for v in values if int(v) != 0}))
+
+
+TILE_EVIDENCE_FILTER = 'Classification != 7 && Synthetic == 0 && PointSourceId != 0'
+
+
+def scan_tile_evidence(stages, endpoint):
+    """Filter attribution evidence only; never modify a delivered point cloud."""
+    with tempfile.TemporaryDirectory(prefix='atco_tile_index_') as tmp:
+        tmp = Path(tmp)
+        manifest, metadata = tmp / 'pipeline.json', tmp / 'metadata.json'
+        pipeline = list(stages) + [
+            {'type': 'filters.expression', 'inputs': [endpoint],
+             'expression': TILE_EVIDENCE_FILTER, 'tag': 'flight_evidence'},
+            {'type': 'filters.stats', 'inputs': ['flight_evidence'],
+             'dimensions': 'GpsTime,PointSourceId', 'enumerate': 'PointSourceId', 'tag': 'gps_stats'},
+            {'type': 'writers.null', 'inputs': ['gps_stats']},
+        ]
+        manifest.write_text(json.dumps({'pipeline': pipeline}), encoding='utf-8')
+        run(['pdal', 'pipeline', str(manifest), '--metadata', str(metadata), '--stream'])
+        return tile_point_evidence(json.loads(metadata.read_text(encoding='utf-8')))
 
 
 def final_tile_point_evidence(laz_path: Path):
     """Read the final tile once, without altering any point attributes."""
-    proc = run(['pdal', 'info', '--stats', '--dimensions', 'GpsTime,PointSourceId',
-                '--enumerate', 'PointSourceId', str(laz_path)])
-    return tile_point_evidence(json.loads(proc.stdout))
+    return scan_tile_evidence([{'type': 'readers.las', 'filename': str(laz_path), 'tag': 'reader'}], 'reader')
 
 
 def load_trajectory_index():
@@ -789,7 +807,7 @@ def load_trajectory_index():
         df = pd.read_parquet(path)
     except Exception as exc:
         raise RuntimeError(f'Cannot read TX trajectory index: {path}: {exc}') from exc
-    required = {'date_from_folder',
+    required = {'date_from_folder', 'trajectory_id',
                 'las_adjusted_gps_start', 'las_adjusted_gps_end'}
     if not required.issubset(df.columns):
         raise ValueError(f'Trajectory index missing columns {required - set(df.columns)}: {path}')
@@ -803,8 +821,8 @@ def trajectory_attributes(laz_path: Path, trajectory_index):
 
 def trajectory_attributes_from_evidence(evidence, trajectory_index, label):
     rng, line_ids = evidence
-    # Preserve the point attribute exactly as classified, including zero.
-    lines = ', '.join(str(v) for v in line_ids)
+    # Preserve classified real-point IDs; zero is not a flight strip.
+    lines = ', '.join(str(v) for v in line_ids if v != 0)
     dates, julian = '', None
     if trajectory_index is not None and rng:
         lo, hi = rng
@@ -824,24 +842,37 @@ def trajectory_attributes_from_evidence(evidence, trajectory_index, label):
 
 
 def source_segment_point_evidence(seg_row, chosen, crs):
-    """Read GPS range and actual point source IDs inside the segment; no LAS writer."""
+    """Read actual point IDs and GPS time inside a segment, without LAS export."""
     if not chosen:
         return None, ()
-    with tempfile.TemporaryDirectory(prefix='atco_tile_index_') as tmp:
-        tmp = Path(tmp)
-        manifest, metadata = tmp / 'pipeline.json', tmp / 'metadata.json'
-        # Reuse the exact reader/crop/noise-filter stages from delivery export.
-        # The default_srs on missing headers is in-memory only; no source or
-        # output LAS/LAZ header is written by this pipeline.
-        stages = pipeline_for_segment(seg_row, chosen, tmp / 'unused.laz', None, crs)['pipeline'][:-1]
-        stages.extend([
-            {'type': 'filters.stats', 'inputs': ['clean'], 'dimensions': 'GpsTime,PointSourceId',
-             'enumerate': 'PointSourceId', 'tag': 'gps_stats'},
-            {'type': 'writers.null', 'inputs': ['gps_stats']},
-        ])
-        manifest.write_text(json.dumps({'pipeline': stages}), encoding='utf-8')
-        run(['pdal', 'pipeline', str(manifest), '--metadata', str(metadata), '--stream'])
-        return tile_point_evidence(json.loads(metadata.read_text(encoding='utf-8')))
+    stages = pipeline_for_segment(seg_row, chosen, Path('unused.laz'), None, crs)['pipeline'][:-1]
+    return scan_tile_evidence(stages, 'clean')
+
+
+def legacy_trajectory_matches(evidence, trajectory_index):
+    """Detect suspected full-flight IDs, never reinterpret arbitrary strip IDs.
+
+    AB25126_G396_1 -> 2511, AB23926_G521_1A -> 2391.
+    Use only time-overlapping published trajectories. A match is evidence
+    for review, not proof of incorrect classification.
+    """
+    rng, ids = evidence
+    if not rng or not ids:
+        return []
+    lo, hi = rng
+    if not float('-inf') < lo <= hi < float('inf'):
+        return []
+    hit = trajectory_index[(trajectory_index['las_adjusted_gps_end'] >= lo) &
+                           (trajectory_index['las_adjusted_gps_start'] <= hi)]
+    found = set()
+    for name in hit['trajectory_id'].dropna():
+        name = str(name).strip()
+        match = re.fullmatch(r'[A-Z]+(\d{3})\d{2}_G\d+_(\d+)[A-Z]*', name, re.IGNORECASE)
+        if match:
+            old_id = int(match.group(1) + match.group(2))
+            if old_id in ids:
+                found.add((old_id, name))
+    return sorted(found)
 
 
 def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz_dir: Path | None = None, source_inventory=None):
@@ -900,13 +931,22 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
                 if i % 10 == 0 or i == len(jobs):
                     print(f'Tile Index GPS scan {i}/{len(jobs)}; elapsed={time.monotonic()-started:.1f}s', flush=True)
     records = []
+    line_qa = []
     for _, row in seg.iterrows():
-        fldate, flightline, julian = '', '', None
+        name = str(row.PointCloudName)
         if source_mode:
-            fldate, flightline, julian = trajectory_attributes_from_evidence(evidence_by_tile[str(row.PointCloudName)], trajectory_index, row.PointCloudName)
+            evidence = evidence_by_tile[name]
         else:
-            laz_path = laz_dir / f'{row.PointCloudName}.laz'
-            fldate, flightline, julian = trajectory_attributes(laz_path, trajectory_index)
+            evidence = final_tile_point_evidence(laz_dir / f'{name}.laz')
+            evidence_by_tile[name] = evidence
+        fldate, flightline, julian = trajectory_attributes_from_evidence(evidence, trajectory_index, name)
+        matches = legacy_trajectory_matches(evidence, trajectory_index)
+        status = 'REVIEW_LEGACY_FLIGHT_ID' if matches else ('NO_LINE_EVIDENCE' if not evidence[1] else 'NO_LEGACY_MATCH')
+        line_qa.append({'NAME': name, 'PointSourceIds': flightline, 'status': status,
+                        'matched_line_ids': ', '.join(str(v) for v in sorted({i for i, _ in matches})),
+                        'matched_trajectories': ', '.join(n for _, n in matches)})
+        if matches:
+            print(f'WARNING: {name}: possible unsplit flight numbering: {matches}', flush=True)
         if tx:
             rec = {
                 'BlockNum': str(row.TileSeq),
@@ -932,6 +972,11 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
             }
         rec['geometry'] = row.geometry
         records.append(rec)
+    qa = base / 'QA' / 'TILES'
+    qa.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(line_qa).to_csv(qa / 'TILES_line_number_qa.csv', index=False, encoding='utf-8-sig')
+    legacy_count = sum(r['status'] == 'REVIEW_LEGACY_FLIGHT_ID' for r in line_qa)
+    print(f'Tile Index line numbering: {legacy_count}/{len(line_qa)} tiles flagged for review; see TILES_line_number_qa.csv', flush=True)
     frame = gpd.GeoDataFrame(records, geometry='geometry', crs=seg.crs)
     if not tx:
         # Nullable 32-bit integer, including tiles without flight metadata.
@@ -972,7 +1017,11 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
         'year': str(YEAR),
         'tx_trajectory_attribution': bool(tx),
         'trajectory_attribution': 'POINT_SOURCE_ID_LINES_GPS_RANGE_DATES',
-        'flightline_source': 'LAS PointSourceId (unique numeric values, sorted)',
+        'flightline_source': 'LAS PointSourceId (unique nonzero real-point values, sorted)',
+        'point_evidence_filter': TILE_EVIDENCE_FILTER,
+        'legacy_line_number_review_tiles': legacy_count,
+        'legacy_line_number_qa': str(qa / 'TILES_line_number_qa.csv'),
+        'legacy_line_number_rule': 'Time-overlapping ABDDDYY_Gnnn_N trajectory -> DDDN; warning only',
         'fldate_rule': 'Distinct acquisition dates from GPS-range candidates; not positional mapping to Flightline',
         'gps_evidence': 'CROPPED_SOURCE_POINTS' if source_mode else 'FINAL_LAZ',
         'trajectory_index': str(TRAJECTORY_ROOT / 'trajectory_index.parquet'),
