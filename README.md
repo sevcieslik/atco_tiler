@@ -6,7 +6,7 @@ ATCO delivery processor for classified LAS/LAZ and four-band RGB+NIR GeoTIFF ima
 
 - Segmented TIFF mosaicking and pixel read-back QA use 1024 × 1024 windows; the orthophoto CLI caps the GDAL cache at 128 MiB. RGBI, resolution and NoData=255 rules are unchanged.
 - DX Tile Index fields: BlockNum, PRJ_NAME, YEAR, ZONE, NAME, flline_id, flightid, WONum, fldate, Flightline. flline_id is the earliest matched acquisition date as a DDDYY integer; flightid equals Flightline; WONum is blank.
-- TX/DX flight metadata uses GPS-time range candidates from existing final LAZ. Overlapping flights may require review. Field aliases should equal field names during final GDB assembly.
+- TX/DX Tile Index uses actual unique LAS PointSourceId values for Flightline (and DX flightid). Distinct dates and DX DDDYY are derived independently from GPS-time range candidates in the trajectory index. Index-only runs read cropped source points; combined exports read final LAZ. Field aliases should equal field names during final GDB assembly.
 - Fixed Python module imports, indentation and misleading AOI preflight success messages.
 
 ## Operator workflow
