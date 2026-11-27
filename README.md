@@ -1,6 +1,12 @@
-# ATCO Retiler v1.08.04
+# ATCO Retiler v1.08.05
 
 ATCO delivery processor for classified LAS/LAZ and four-band RGB+NIR GeoTIFF imagery. The development branch is undergoing Windows UAT; **main remains the stable v1.07 release**.
+
+## Changes in 1.08.05
+
+- Tile Index attribution excludes noise (class 7), synthetic points and line 0 in both source-only and final-LAZ modes. LiDAR exports are unchanged.
+- `Flightline` and DX `flightid` use real-point `PointSourceId` values. Published trajectory IDs are checked for legacy full-flight numbering (e.g. `AB25126_G396_1` → `2511`) only when GPS ranges overlap. Matches are flagged for review, not corrected or blocked. See `QA/TILES/TILES_line_number_qa.csv`.
+- Tile Index can run without exported LAZ; local source LAS/LAZ and trajectory index are required in the GUI. Revalidate after changing selected products.
 
 ## Changes in 1.08.04
 
@@ -18,7 +24,7 @@ ATCO delivery processor for classified LAS/LAZ and four-band RGB+NIR GeoTIFF ima
 5. Select one or more **Eligible Entities** discovered from local AOI/imagery/cloud coverage. The remote registry supplies authoritative geometry and revisions, not a list of W-drive paths for the operator.
 6. Click **Process** to regenerate selected deliverables, or **Process Missing** to fill incomplete outputs. Review QA reports and open products in client software.
 
-**Process stays disabled** until the current input and requested source products are validated. A new input directory or changed imagery/cloud product requirement needs revalidation. Selecting Tile Index for an already validated circuit does not invalidate source coverage.
+**Process stays disabled** until the current input and requested source products are validated. A new input directory or changed imagery/cloud product requirement needs revalidation. Tile Index also requires point-cloud coverage; changes in selected products require validation.
 
 ## Circuits and areas
 
