@@ -4,7 +4,7 @@ ATCO delivery processor for classified LAS/LAZ and four-band RGB+NIR GeoTIFF ima
 
 ## Changes in 1.08.05
 
-- Tile Index attribution excludes noise (class 7), synthetic points and line 0 in both source-only and final-LAZ modes. LiDAR exports are unchanged.
+- Tile Index attribution excludes noise (class 7), synthetic points and line 0 in both source-only and final-LAZ modes. Synthetic Line 0 is valid; any non-noise non-synthetic Line 0 is counted before filtering and marked FAIL_REAL_LINE_ZERO in QA (ground class 2 and per-class counts included). The SHP can still be generated for review, but affected tiles must not be released until classification is corrected. LiDAR exports are unchanged.
 - `Flightline` and DX `flightid` use real-point `PointSourceId` values. Published trajectory IDs are checked for legacy full-flight numbering (e.g. `AB25126_G396_1` → `2511`) only when GPS ranges overlap. Matches are flagged for review, not corrected or blocked. See `QA/TILES/TILES_line_number_qa.csv`.
 - Tile Index can run without exported LAZ; local source LAS/LAZ and trajectory index are required in the GUI. Revalidate after changing selected products.
 
