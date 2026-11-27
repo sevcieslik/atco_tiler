@@ -2,6 +2,8 @@
 
 ## v1.08.04 (Windows UAT)
 
+- TX/DX Tile Index now uses classified LAS PointSourceId for Flightline and DX flightid. Acquisition dates and DX DDDYY remain GPS-range based. No point attribute edits or new line-number QA.
+
 - Windowed segmented TIFF mosaic and read-back QA (1024 × 1024 pixels); 128 MiB GDAL cache in the orthophoto CLI.
 - DX Tile Index: ten agreed fields; integer DDDYY for earliest matched acquisition date; flightid matches Flightline; blank WONum.
 - Shared TX/DX temporal attribution and optional PDAL/PyArrow setup for index-only runs. Spatial confirmation is not implemented.
