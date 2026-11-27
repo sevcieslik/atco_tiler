@@ -212,4 +212,7 @@ Tile Index-only reads cropped local source LAS/LAZ; no LiDAR output is generated
 Flightline and DX flightid use unique PointSourceId values from non-synthetic,
 non-noise points with nonzero line IDs. Dates and DX DDDYY use the trajectory index.
 Legacy full-flight IDs matching overlapping published trajectories are warnings;
-review QA/TILES/TILES_line_number_qa.csv. No point attributes are modified.
+review QA/TILES/TILES_line_number_qa.csv. Synthetic Line 0 is valid. Any real
+non-noise Line 0 is a QA failure (FAIL_REAL_LINE_ZERO); ground and per-class counts
+are reported. SHP may be generated for review; do not release affected tiles.
+No point attributes are modified.
