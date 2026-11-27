@@ -123,7 +123,7 @@ ul{margin-top:7px}.toc a{color:var(--blue);text-decoration:none;margin-right:18p
 <section class="card" id="trajectory"><h2>8. TX/DX trajectory attribution</h2>
 <p>The central trajectory source is built from the current/highest available processed trajectory version for each flight. The index stores flight date, flightline code and adjusted GPS-time range.</p>
 <p>Tile Index Flightline and DX flightid are the sorted unique PointSourceId values from the classified points, including zero if present. Acquisition dates are distinct GPS-range candidates from the trajectory index; they are not positional matches to line IDs. Index-only processing uses cropped source points without exporting LAZ.</p>
-<p>For each TX or DX final LAZ, Retiler reads the tile GPS-time range and finds overlapping SBET/trajectory records. Matching dates populate <code>fldate</code>; matching codes populate <code>Flightline</code>. Multiple values are retained as comma-separated values.</p>
+<p>For combined exports, the statistics are read from the final LAZ; for Tile Index-only runs, they are read from the cropped source LAS/LAZ points. Multiple values are retained as comma-separated values.</p>
 <div class="warn">Blank flight attribution means no GPS-time candidate was found. Time overlap is not proof of spatial attribution. Do not invent a value; review the trajectory index and LAZ GPS-time metadata.</div>
 </section>
 
