@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from circuit_identity import resolve_circuit_id
+
 import argparse
 import csv
 import json
@@ -22,9 +24,11 @@ from shapely import wkb
 from shapely.geometry import box
 from shapely.ops import unary_union
 
+from cloud_source_selection import select_entity_clouds
+
 from atco_delivery import (
     YEAR as DELIVERY_YEAR, client_entity_name,
-    enrich_segments, entity_type, is_tx, output_base, tile_index_shp_path, utm_zone,
+    enrich_segments, entity_type, is_tx, output_base, product_folder, tile_index_shp_path, utm_zone,
 )
 
 CENTRAL_ROOT = Path(r"W:\APPS\PIT\ATCO")
@@ -214,12 +218,8 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
         raise ValueError(f'No valid AOI polygon geometry: {selected_polygon}')
 
     with db_connect_readonly(DB_PATH) as con:
-        entity = con.execute(
-            "SELECT current_revision FROM entities WHERE entity_kind='circuit' AND entity_id=?",
-            (circuit,),
-        ).fetchone()
-        if not entity:
-            raise ValueError(f'{circuit} is not registered in central AOI database')
+        canonical_circuit, current_revision_id = resolve_circuit_id(con, circuit)
+        circuit = canonical_circuit
         rows = con.execute(
             """SELECT id, revision_num, revision_code, source_version, crs_wkt, polygon_wkb, source_folder
                FROM revisions WHERE entity_kind='circuit' AND entity_id=? ORDER BY revision_num""",
@@ -240,7 +240,6 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
         if diff <= 0.05:
             matches.append((row, diff, target_crs, central_geom))
 
-    current_revision_id = int(entity[0])
     if not matches:
         current = next((r for r in rows if int(r[0]) == current_revision_id), rows[-1])
         raise RuntimeError(
@@ -255,6 +254,7 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
             'Use the current production AOI.'
         )
     return {
+        'entity_id': circuit,
         'revision_id': row[0],
         'revision_num': int(row[1]),
         'revision_code': row[2],
@@ -296,26 +296,65 @@ def source_clouds(folder: Path):
 
 
 def crs_from_json(obj):
+    """Read explicit PDAL CRS fields, including string and PROJJSON forms."""
+    if isinstance(obj, str) and obj.strip().casefold() not in ('', 'unknown', 'undefined', 'none', 'null'):
+        try:
+            return CRS.from_user_input(obj)
+        except Exception:
+            return None
     if isinstance(obj, dict):
-        for key in ('compoundwkt', 'wkt', 'horizontal', 'spatialreference', 'proj4'):
-            val = obj.get(key)
-            if isinstance(val, str) and val.strip():
-                try:
-                    return CRS.from_user_input(val)
-                except Exception:
-                    pass
-        for value in obj.values():
-            got = crs_from_json(value)
-            if got:
-                return got
+        if obj.get('type') in ('ProjectedCRS', 'CompoundCRS', 'GeographicCRS',
+                               'GeodeticCRS', 'BoundCRS'):
+            try:
+                return CRS.from_json_dict(obj)
+            except Exception:
+                pass
+        for key in ('compoundwkt', 'wkt', 'spatialreference', 'comp_spatialreference',
+                    'srs', 'horizontal', 'prettywkt', 'proj4', 'projjson', 'coordinate_system'):
+            if key in obj:
+                got = crs_from_json(obj[key])
+                if got is not None:
+                    return got
+        # Recurse into containers only; filenames and unrelated numeric
+        # metadata must not accidentally be interpreted as CRS definitions.
+        for key, value in obj.items():
+            if key == 'units':
+                continue
+            if isinstance(value, (dict, list)):
+                got = crs_from_json(value)
+                if got is not None:
+                    return got
     elif isinstance(obj, list):
         for value in obj:
-            got = crs_from_json(value)
-            if got:
-                return got
+            if isinstance(value, (dict, list)):
+                got = crs_from_json(value)
+                if got is not None:
+                    return got
     return None
 
 
+def has_explicit_crs_metadata(obj):
+    """Distinguish blank projection metadata from a nonempty unparseable CRS."""
+    keys = ('compoundwkt', 'wkt', 'spatialreference', 'comp_spatialreference',
+            'srs', 'horizontal', 'prettywkt', 'prettycompoundwkt', 'proj4', 'projjson', 'coordinate_system', 'vertical')
+    if isinstance(obj, dict):
+        if str(obj.get('user_id', '')).strip().casefold() == 'lasf_projection':
+            return True
+        for key, value in obj.items():
+            if key == 'units':
+                continue
+            if key in keys:
+                if isinstance(value, str) and value.strip().casefold() not in ('', 'unknown', 'undefined', 'none', 'null'):
+                    return True
+                if isinstance(value, dict) and value.get('type') in (
+                    'ProjectedCRS', 'CompoundCRS', 'GeographicCRS', 'GeodeticCRS', 'BoundCRS', 'VerticalCRS'
+                ):
+                    return True
+            if isinstance(value, (dict, list)) and has_explicit_crs_metadata(value):
+                return True
+    elif isinstance(obj, list):
+        return any(has_explicit_crs_metadata(v) for v in obj if isinstance(v, (dict, list)))
+    return False
 
 
 def horizontal_crs(crs):
@@ -359,76 +398,240 @@ def bbox_from_obj(obj):
     return None
 
 
-def pdal_summary(path: Path):
-    data = json.loads(run(['pdal', 'info', '--summary', str(path)]).stdout)
+def fast_terrascan_header(path: Path):
+    """Read only a narrowly recognised TerraScan LAS 1.4 header.
+
+    Accept no projection VLRs, no EVLRs, and only the standard LASzip VLR.
+    All other layouts, including files with CRS, use PDAL. Never read points.
+    """
+    import math
+    import struct
+    path = Path(path)
+    try:
+        with path.open('rb') as f:
+            stat = os.fstat(f.fileno())
+            h = f.read(375)
+            if len(h) != 375 or h[:4] != b'LASF' or h[24:26] != bytes((1, 4)):
+                return None
+            if h[58:90].split(b'\x00', 1)[0].strip().lower() != b'terrascan':
+                return None
+            header_size, data_offset, vlr_count = struct.unpack_from('<HII', h, 94)
+            point_format = h[104] & 0x3f
+            point_count = struct.unpack_from('<Q', h, 247)[0]
+            evlr_offset, evlr_count = struct.unpack_from('<QI', h, 235)
+            if (header_size != 375 or not header_size <= data_offset < stat.st_size
+                    or point_format not in (6, 7, 8, 9, 10) or not point_count
+                    or evlr_offset or evlr_count or vlr_count > 1):
+                return None
+            if struct.unpack_from('<H', h, 6)[0] & 16:
+                return None
+            f.seek(header_size)
+            for _ in range(vlr_count):
+                v = f.read(54)
+                if len(v) != 54:
+                    return None
+                uid = v[2:18].split(b'\x00', 1)[0].strip().lower()
+                record_id, length = struct.unpack_from('<HH', v, 18)
+                if uid != b'laszip encoded' or record_id != 22204:
+                    return None
+                if f.tell() + length > data_offset:
+                    return None
+                f.seek(length, 1)
+            if f.tell() != data_offset:
+                return None
+            if path.suffix.lower() == '.laz' and vlr_count != 1:
+                return None
+            maxx, minx, maxy, miny, maxz, minz = struct.unpack_from('<6d', h, 179)
+            scales = struct.unpack_from('<3d', h, 131)
+            if not all(math.isfinite(v) for v in (minx, miny, minz, maxx, maxy, maxz, *scales)):
+                return None
+            if minx > maxx or miny > maxy or minz > maxz or any(v <= 0 for v in scales):
+                return None
+            return {'path': str(path), 'name': path.name,
+                    'bounds': [minx, miny, maxx, maxy], 'crs_wkt': None,
+                    'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns,
+                    'header_reader': 'TerraScan LAS 1.4 binary (no CRS)'}
+    except (OSError, ValueError, struct.error):
+        return None
+
+
+def pdal_summary(path: Path, *, pdal_exe=None, log=None, fast_missing=False):
+    """Shared header inspection for preflight and processing; no CRS guessing."""
+    import time
+    path = Path(path)
+    emit = log or (lambda line: print(line, flush=True))
+    if fast_missing:
+        fast = fast_terrascan_header(path)
+        if fast is not None:
+            return fast
+    exe = str(pdal_exe or shutil.which('pdal') or 'pdal')
+    docs = []
+    def inspect(option):
+        cmd = [exe, 'info', option, str(path)]
+        started = time.monotonic()
+        emit(f'LiDAR header: {option} {path}')
+        try:
+            result = subprocess.run(cmd, capture_output=True, text=True,
+                                    errors='replace', timeout=120,
+                                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            emit(f'ERROR: PDAL header command failed: {cmd!r}: {exc}')
+            raise RuntimeError(f'PDAL {option} failed for {path}: {exc}') from exc
+        emit(f'PDAL {option}: exit={result.returncode}, elapsed={time.monotonic()-started:.1f}s')
+        if result.stderr.strip():
+            emit(f'PDAL stderr ({path.name}, {option}): {result.stderr.strip()}')
+        if result.returncode:
+            emit(f'PDAL stdout ({path.name}, {option}): {result.stdout}')
+            raise RuntimeError(f'PDAL {option} failed for {path}: exit {result.returncode}')
+        try:
+            doc = json.loads(result.stdout)
+        except ValueError as exc:
+            emit(f'Invalid PDAL JSON ({path.name}, {option}): {result.stdout}')
+            raise RuntimeError(f'Invalid PDAL JSON for {path}: {exc}') from exc
+        docs.append((option, doc))
+        return doc
+
+    data = inspect('--summary')
     summary = data.get('summary', data)
     bounds = bbox_from_obj(summary.get('bounds', {})) or bbox_from_obj(data.get('bounds', {}))
+    source_crs = crs_from_json(summary) or crs_from_json(data)
+    header_meta = summary.get('metadata', {})
+    complete_blank = (isinstance(header_meta, dict) and isinstance(header_meta.get('srs'), dict)
+                      and 'spatialreference' in header_meta and 'comp_spatialreference' in header_meta
+                      and not has_explicit_crs_metadata(data))
+    if not bounds or (source_crs is None and not complete_blank):
+        emit(f'LiDAR header fallback: {path.name}; bounds={bounds}; CRS={source_crs is not None}')
+        meta = inspect('--metadata')
+        bounds = bounds or bbox_from_obj(meta)
+        source_crs = source_crs or crs_from_json(meta)
+    explicit_crs = any(has_explicit_crs_metadata(doc) for _, doc in docs) if source_crs is None else False
+    if not bounds or (source_crs is None and explicit_crs):
+        for option, doc in docs:
+            emit(f'PDAL diagnostic JSON ({path.name}, {option}): {json.dumps(doc, ensure_ascii=False)}')
     if not bounds:
-        raise ValueError(f'PDAL returned no bounds for {path.name}')
-    source_crs = crs_from_json(summary.get('srs', {})) or crs_from_json(data.get('metadata', {}))
+        raise ValueError(f'LiDAR extent unavailable: {path}')
+    if source_crs is None:
+        if explicit_crs:
+            raise ValueError(f'LiDAR CRS metadata exists but cannot be interpreted: {path}. Do not overwrite an unknown CRS.')
+        emit(f'WARNING: LiDAR CRS unavailable after summary and metadata inspection: {path}')
+    else:
+        emit(f'LiDAR header OK: {path.name}; CRS={crs_short_label(source_crs)}; bounds={bounds}')
     return {
         'path': str(path),
         'name': path.name,
         'bounds': list(bounds),
-        'crs_wkt': source_crs.to_wkt() if source_crs else None,
+        'crs_wkt': source_crs.to_wkt() if source_crs is not None else None,
         'size': path.stat().st_size,
         'mtime_ns': path.stat().st_mtime_ns,
+        'header_reader': 'PDAL',
     }
+
+
+def missing_source_crs(expected_crs):
+    """ATCO TerraScan header repair: assign AOI horizontal CRS + CGVD2013."""
+    from pyproj.crs import CompoundCRS
+    horizontal = horizontal_crs(expected_crs)
+    if not any(horizontal.equals(CRS.from_epsg(code)) for code in (2955, 2956)):
+        raise ValueError(
+            f'Missing LiDAR CRS: automatic assignment is limited to ATCO NAD83(CSRS) '
+            f'UTM zones 11/12; AOI CRS is {crs_short_label(horizontal)}.'
+        )
+    return CRS.from_user_input(CompoundCRS(
+        name=f'{horizontal.name} + CGVD2013 height',
+        components=[horizontal, CRS.from_epsg(6647)],
+    ).to_wkt())
+
+
+def effective_source_crs(row, expected_crs, log=None):
+    """Only an absent CRS may be assigned; never replace an existing one."""
+    if row.get('crs_wkt'):
+        return CRS.from_wkt(row['crs_wkt'])
+    assigned = missing_source_crs(expected_crs)
+    row['assigned_crs_wkt'] = assigned.to_wkt()
+    emit = log or (lambda line: print(line, flush=True))
+    emit(f'WARNING: {row["name"]}: missing source CRS; assuming AOI '
+         f'{crs_short_label(horizontal_crs(assigned))} + CGVD2013 for LiDAR export only; '
+         'no coordinate transformation; source file unchanged.')
+    return assigned
 
 
 def cache_fingerprint(files):
     return [{'path': str(p), 'size': p.stat().st_size, 'mtime_ns': p.stat().st_mtime_ns} for p in files]
 
 
-def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
-    cache = qa_dir / 'source_inventory.json'
+def cloud_inventory(files, expected_crs: CRS, qa_dir: Path | None, *, pdal_exe=None, log=None, workers=None):
+    import time
+    emit = log or (lambda line: print(line, flush=True))
+    started = time.monotonic()
+    files = sorted((Path(p) for p in files), key=lambda p: str(p).casefold())
+    if not files:
+        raise ValueError('No source LAS/LAZ files')
+    cache = qa_dir / 'source_inventory.json' if qa_dir is not None else None
     fp = cache_fingerprint(files)
-    if cache.is_file():
+    if cache is not None and cache.is_file():
         try:
             saved = json.loads(cache.read_text(encoding='utf-8'))
-            if saved.get('fingerprint') == fp:
+            if (saved.get('fingerprint') == fp and saved.get('crs', {}).get('expected_horizontal_wkt') == horizontal_crs(expected_crs).to_wkt()
+                    and saved.get('crs', {}).get('header_policy') == 'assign_missing_only_v2'):
                 rows = saved['files']
                 meta = saved.get('crs') or {}
                 if meta.get('output_crs_wkt'):
                     output_crs = CRS.from_wkt(meta['output_crs_wkt'])
-                    print(f'Using cached point-cloud inventory: {len(rows)} files', flush=True)
+                    emit(f'Using cached point-cloud inventory: {len(rows)} files | elapsed={time.monotonic()-started:.1f}s')
                     if meta.get('horizontal_crs'):
-                        print(f'  Horizontal CRS: {meta["horizontal_crs"]}', flush=True)
+                        emit(f'  Horizontal CRS: {meta["horizontal_crs"]}')
                     if meta.get('vertical_crs'):
-                        print(f'  Vertical CRS  : {meta["vertical_crs"]} (preserved in output LAZ/LAS)', flush=True)
+                        emit(f'  Vertical CRS  : {meta["vertical_crs"]} (preserved in output LAZ/LAS)')
                     return rows, output_crs, meta
         except Exception:
             pass
 
-    workers = resolve_parallel_workers(configured_parallel_workers(), len(files))
-    rows = []
-    print(f'Indexing {len(files)} LAS/LAZ source file(s) with {workers} worker(s)...', flush=True)
+    workers = min(8, resolve_parallel_workers(configured_parallel_workers() if workers is None else workers, len(files)))
+    rows, failures = [], []
+    emit(f'Indexing {len(files)} LAS/LAZ source file(s) with {workers} worker(s)...')
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        futs = {ex.submit(pdal_summary, p): p for p in files}
+        futs = {ex.submit(pdal_summary, p, pdal_exe=pdal_exe, log=emit, fast_missing=True): p for p in files}
         for i, fut in enumerate(as_completed(futs), 1):
             p = futs[fut]
             try:
                 rows.append(fut.result())
             except Exception as exc:
-                raise RuntimeError(f'Failed to inspect {p}: {exc}') from exc
-            if i % 100 == 0 or i == len(files):
-                print(f'  Indexed {i}/{len(files)}', flush=True)
+                failures.append(f'{p}: {type(exc).__name__}: {exc}')
+                emit(f'ERROR: {failures[-1]}')
+            if i % 25 == 0 or i == len(files):
+                emit(f'  Indexed {i}/{len(files)} | elapsed={time.monotonic()-started:.1f}s')
+    if failures:
+        raise ValueError(f'{len(failures)}/{len(files)} LiDAR header checks failed. First: {failures[0]}. See Activity Log.')
     rows.sort(key=lambda r: r['path'].casefold())
+    fast_count = sum(r.get('header_reader', '').startswith('TerraScan') for r in rows)
+    emit(f'Header scan: {fast_count} binary TerraScan; {len(rows)-fast_count} PDAL; elapsed={time.monotonic()-started:.1f}s')
 
-    missing = [r['name'] for r in rows if not r['crs_wkt']]
-    if missing:
-        raise ValueError(
-            f'{len(missing)} source LAS/LAZ file(s) have no CRS in the header. Example: {missing[0]}. '
-            'Fix the headers before processing; v1 will not guess CRS.'
-        )
     expected_horizontal = horizontal_crs(expected_crs)
     mismatched = []
     source_crs_objects = []
+    parsed = {}
+    assigned = None
+    assigned_wkt = None
+    components = {}
     for r in rows:
-        src = CRS.from_wkt(r['crs_wkt'])
+        wkt = r.get('crs_wkt')
+        if wkt is None:
+            if assigned is None:
+                assigned = missing_source_crs(expected_crs)
+                assigned_wkt = assigned.to_wkt()
+            r['assigned_crs_wkt'] = assigned_wkt
+            src = assigned
+        else:
+            if wkt not in parsed:
+                parsed[wkt] = CRS.from_wkt(wkt)
+            src = parsed[wkt]
         source_crs_objects.append(src)
-        if not horizontal_crs(src).equals(expected_horizontal):
-            mismatched.append((r['name'], crs_short_label(horizontal_crs(src)), src.to_string()))
+        if id(src) not in components:
+            hcrs = horizontal_crs(src)
+            components[id(src)] = (hcrs, vertical_crs(src), hcrs.equals(expected_horizontal))
+        hcrs, _, matches = components[id(src)]
+        if not matches:
+            mismatched.append((r['name'], crs_short_label(hcrs), src.to_string()))
     if mismatched:
         sample = ', '.join(f'{n}={h}' for n, h, _ in mismatched[:5])
         raise ValueError(
@@ -438,7 +641,7 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
 
     # Preserve the source vertical datum in output LAS/LAZ. A compound CRS such as
     # EPSG:2956 + CGVD2013 is valid when its horizontal component matches the AOI.
-    verticals = [vertical_crs(c) for c in source_crs_objects]
+    verticals = [components[id(c)][1] for c in source_crs_objects]
     has_vertical = [v is not None for v in verticals]
     if any(has_vertical) and not all(has_vertical):
         raise ValueError(
@@ -449,7 +652,7 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
         first_vertical = verticals[0]
         inconsistent_vertical = []
         for r, v in zip(rows, verticals):
-            if not v.equals(first_vertical):
+            if v is not first_vertical and not v.equals(first_vertical):
                 inconsistent_vertical.append((r['name'], crs_short_label(v)))
         if inconsistent_vertical:
             sample = ', '.join(f'{n}={v}' for n, v in inconsistent_vertical[:5])
@@ -461,16 +664,34 @@ def cloud_inventory(files, expected_crs: CRS, qa_dir: Path):
         output_crs = expected_horizontal
 
     rows_meta = {
+        'expected_horizontal_wkt': expected_horizontal.to_wkt(),
+        'header_policy': 'assign_missing_only_v2',
+        'assigned_missing_crs_files': [r['name'] for r in rows if r.get('assigned_crs_wkt')],
         'horizontal_crs': crs_short_label(expected_horizontal),
         'vertical_crs': crs_short_label(verticals[0]) if verticals and verticals[0] is not None else None,
         'output_crs_wkt': output_crs.to_wkt(),
     }
-    print(f'  Horizontal CRS: {rows_meta["horizontal_crs"]}', flush=True)
+    emit(f'  Horizontal CRS: {rows_meta["horizontal_crs"]}')
     if rows_meta['vertical_crs']:
-        print(f'  Vertical CRS  : {rows_meta["vertical_crs"]} (preserved in output LAZ/LAS)', flush=True)
+        emit(f'  Vertical CRS  : {rows_meta["vertical_crs"]} (preserved in output LAZ/LAS)')
 
-    qa_dir.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps({'fingerprint': fp, 'files': rows, 'crs': rows_meta}, indent=2), encoding='utf-8')
+    emit(f'Missing source CRS: {len(rows_meta["assigned_missing_crs_files"])}/{len(rows)}; assign AOI + CGVD2013 on LiDAR export only; source files unchanged')
+    if cache_fingerprint(files) != fp:
+        raise ValueError('Source LAS/LAZ changed during header inspection; validate again.')
+    if cache is not None:
+        try:
+            qa_dir.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8', dir=qa_dir, delete=False) as f:
+                tmp = Path(f.name)
+                json.dump({'fingerprint': fp, 'files': rows, 'crs': rows_meta}, f)
+            try:
+                os.replace(tmp, cache)
+            finally:
+                tmp.unlink(missing_ok=True)
+            emit(f'Inventory cache saved: {cache}')
+        except OSError as exc:
+            emit(f'WARNING: could not save inventory cache: {exc}')
+    emit(f'LiDAR inventory complete: {len(rows)} files; elapsed={time.monotonic()-started:.1f}s')
     return rows, output_crs, rows_meta
 
 
@@ -527,63 +748,171 @@ def _find_stats_dimension(obj, dimension='GpsTime'):
     return None
 
 
-def gps_time_range(laz_path: Path):
-    """Return min/max adjusted GPS time from a final tile, or None if unavailable."""
-    if not laz_path.is_file() or laz_path.stat().st_size == 0:
+def line_zero_by_class(data):
+    """Read the single expressionstats result, including a valid empty result."""
+    def find_stage(obj):
+        if isinstance(obj, dict):
+            if str(obj.get('dimension', '')).casefold() == 'classification':
+                return obj
+            for value in obj.values():
+                found = find_stage(value)
+                if found is not None:
+                    return found
+        elif isinstance(obj, list):
+            for value in obj:
+                found = find_stage(value)
+                if found is not None:
+                    return found
         return None
-    proc = run(['pdal', 'info', '--stats', '--dimensions', 'GpsTime', str(laz_path)], check=False)
-    if proc.returncode:
-        return None
-    try:
-        data = json.loads(proc.stdout)
-        stat = _find_stats_dimension(data, 'GpsTime')
-        if stat is None:
-            return None
-        return float(stat['minimum']), float(stat['maximum'])
-    except Exception:
-        return None
+    stage = find_stage(data)
+    if stage is None:
+        raise ValueError('PDAL metadata missing Line 0 classification statistics')
+    stats = stage.get('statistic', [])
+    if isinstance(stats, dict):
+        stats = [stats]
+    if not stats:
+        return {}
+    if len(stats) != 1 or 'expression' not in stats[0]:
+        raise ValueError('Unexpected Line 0 expression statistics')
+    bins = stats[0].get('bins', [])
+    if isinstance(bins, dict):
+        bins = [bins]
+    return {int(float(b['value'])): int(b['count']) for b in bins if int(b['count']) > 0}
+
+
+def tile_point_evidence(data):
+    """Parse GPS range, classified strip IDs and non-synthetic Line 0 counts."""
+    zero_classes = line_zero_by_class(data)
+    gps = _find_stats_dimension(data, 'GpsTime')
+    ids = _find_stats_dimension(data, 'PointSourceId')
+    rng = None
+    if gps and int(gps.get('count', 0)) > 0:
+        rng = (float(gps['minimum']), float(gps['maximum']))
+    if not ids or int(ids.get('count', 0)) == 0:
+        return rng, (), zero_classes
+    values = ids.get('values')
+    if values is None:
+        raise ValueError('PDAL PointSourceId statistics did not include enumerated values')
+    if not isinstance(values, list):
+        values = [values]
+    return rng, tuple(sorted({int(v) for v in values if int(v) != 0})), zero_classes
+
+
+TILE_EVIDENCE_FILTER = 'Classification != 7 && Synthetic == 0 && PointSourceId != 0'
+LINE_ZERO_QA_EXPRESSION = 'Classification != 7 && Synthetic == 0 && PointSourceId == 0'
+
+
+def scan_tile_evidence(stages, endpoint):
+    """Filter attribution evidence only; never modify a delivered point cloud."""
+    with tempfile.TemporaryDirectory(prefix='atco_tile_index_') as tmp:
+        tmp = Path(tmp)
+        manifest, metadata = tmp / 'pipeline.json', tmp / 'metadata.json'
+        pipeline = list(stages) + [
+            {'type': 'filters.expressionstats', 'inputs': [endpoint],
+             'dimension': 'Classification', 'expressions': [LINE_ZERO_QA_EXPRESSION],
+             'tag': 'line_zero_qa'},
+            {'type': 'filters.expression', 'inputs': ['line_zero_qa'],
+             'expression': TILE_EVIDENCE_FILTER, 'tag': 'flight_evidence'},
+            {'type': 'filters.stats', 'inputs': ['flight_evidence'],
+             'dimensions': 'GpsTime,PointSourceId', 'enumerate': 'PointSourceId', 'tag': 'gps_stats'},
+            {'type': 'writers.null', 'inputs': ['gps_stats']},
+        ]
+        manifest.write_text(json.dumps({'pipeline': pipeline}), encoding='utf-8')
+        run(['pdal', 'pipeline', str(manifest), '--metadata', str(metadata), '--stream'])
+        return tile_point_evidence(json.loads(metadata.read_text(encoding='utf-8')))
+
+
+def final_tile_point_evidence(laz_path: Path):
+    """Read the final tile once, without altering any point attributes."""
+    return scan_tile_evidence([{'type': 'readers.las', 'filename': str(laz_path), 'tag': 'reader'}], 'reader')
 
 
 def load_trajectory_index():
     path = TRAJECTORY_ROOT / 'trajectory_index.parquet'
     if not path.is_file():
+        print('NOTE: Trajectory index missing; Tile Index flight attributes will be blank.', flush=True)
         return None
     try:
+        import pyarrow  # noqa: F401 - optional, not part of the base GIS runtime
+    except ImportError as exc:
+        raise RuntimeError(
+            'Tile Index trajectory attribution needs optional PyArrow. Run '
+            'INSTALL_TRAJECTORY_SUPPORT.bat and retry. '
+            'Without it the Tile Index would have missing flight metadata.'
+        ) from exc
+    try:
         df = pd.read_parquet(path)
-        required = {'date_from_folder', 'flightline_code', 'las_adjusted_gps_start', 'las_adjusted_gps_end'}
-        if not required.issubset(df.columns):
-            return None
-        return df
-    except Exception:
-        return None
+    except Exception as exc:
+        raise RuntimeError(f'Cannot read TX trajectory index: {path}: {exc}') from exc
+    required = {'date_from_folder', 'trajectory_id',
+                'las_adjusted_gps_start', 'las_adjusted_gps_end'}
+    if not required.issubset(df.columns):
+        raise ValueError(f'Trajectory index missing columns {required - set(df.columns)}: {path}')
+    return df
 
 
 def trajectory_attributes(laz_path: Path, trajectory_index):
-    """Best-effort TX tile attribution from final LAZ GPS time against SBET index."""
-    if trajectory_index is None:
-        return '', ''
-    rng = gps_time_range(laz_path)
-    if not rng:
-        return '', ''
+    """Use actual point source IDs for line labels, GPS range for dates."""
+    return trajectory_attributes_from_evidence(final_tile_point_evidence(laz_path), trajectory_index, laz_path)
+
+
+def trajectory_attributes_from_evidence(evidence, trajectory_index, label):
+    rng, line_ids, _zero_classes = evidence
+    # Preserve classified real-point IDs; zero is not a flight strip.
+    lines = ', '.join(str(v) for v in line_ids if v != 0)
+    dates, julian = '', None
+    if trajectory_index is not None and rng:
+        lo, hi = rng
+        if float('-inf') < lo <= hi < float('inf'):
+            df = trajectory_index
+            hit = df[(df['las_adjusted_gps_end'] >= lo) & (df['las_adjusted_gps_start'] <= hi)]
+            # Date attribution is independent of the line IDs: the trajectory
+            # index has no agreed mapping to cluster-local PointSourceId values.
+            days = sorted({day.date() for value in hit['date_from_folder']
+                           if not pd.isna(day := pd.to_datetime(value, errors='coerce'))})
+            if days:
+                dates = ', '.join(day.isoformat() for day in days)
+                julian = int(days[0].strftime('%j%y'))
+    if any(len(value.encode('utf-8')) > 254 for value in (dates, lines)):
+        raise ValueError(f'Tile Index flight attributes exceed SHP text limit: {label}')
+    return dates, lines, julian
+
+
+def source_segment_point_evidence(seg_row, chosen, crs):
+    """Read actual point IDs and GPS time inside a segment, without LAS export."""
+    if not chosen:
+        return None, (), {}
+    stages = pipeline_for_segment(seg_row, chosen, Path('unused.laz'), None, crs)['pipeline'][:-1]
+    return scan_tile_evidence(stages, 'clean')
+
+
+def legacy_trajectory_matches(evidence, trajectory_index):
+    """Detect suspected full-flight IDs, never reinterpret arbitrary strip IDs.
+
+    AB25126_G396_1 -> 2511, AB23926_G521_1A -> 2391.
+    Use only time-overlapping published trajectories. A match is evidence
+    for review, not proof of incorrect classification.
+    """
+    rng, ids, _zero_classes = evidence
+    if not rng or not ids:
+        return []
     lo, hi = rng
-    df = trajectory_index
-    hit = df[(df['las_adjusted_gps_end'] >= lo) & (df['las_adjusted_gps_start'] <= hi)].copy()
-    if hit.empty:
-        return '', ''
-    dates = []
-    lines = []
-    for v in hit['date_from_folder'].tolist():
-        v = str(v).strip()
-        if v and v.lower() != 'nan' and v not in dates:
-            dates.append(v)
-    for v in hit['flightline_code'].tolist():
-        v = str(v).strip()
-        if v and v.lower() != 'nan' and v not in lines:
-            lines.append(v)
-    return ', '.join(dates), ', '.join(lines)
+    if not float('-inf') < lo <= hi < float('inf'):
+        return []
+    hit = trajectory_index[(trajectory_index['las_adjusted_gps_end'] >= lo) &
+                           (trajectory_index['las_adjusted_gps_start'] <= hi)]
+    found = set()
+    for name in hit['trajectory_id'].dropna():
+        name = str(name).strip()
+        match = re.fullmatch(r'[A-Z]+(\d{3})\d{2}_G\d+_(\d+)[A-Z]*', name, re.IGNORECASE)
+        if match:
+            old_id = int(match.group(1) + match.group(2))
+            if old_id in ids:
+                found.add((old_id, name))
+    return sorted(found)
 
 
-def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz_dir: Path | None = None):
+def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz_dir: Path | None = None, source_inventory=None):
     """Create the intermediate client Tile Index as a shapefile.
 
     Retiler deliberately stops at SHP.  The final project/entity GDB is assembled
@@ -595,33 +924,125 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     zone = utm_zone(seg.crs)
     client_name = client_entity_name(circuit)
 
-    if is_tx(circuit):
-        trajectory_index = load_trajectory_index()
-        records = []
-        for _, row in seg.iterrows():
-            fldate = ''
-            flightline = ''
-            if laz_dir is not None:
-                laz_path = laz_dir / f'{row.DeliveryName}.laz'
-                fldate, flightline = trajectory_attributes(laz_path, trajectory_index)
-            records.append({
+    if source_inventory is None:
+        # Do not publish an apparently complete client index without its LAZ inputs.
+        # This also protects CLI callers and combined LAZ + Tile Index runs.
+        laz_dir = Path(laz_dir) if laz_dir is not None else base / product_folder('LAZ')
+        missing_laz = []
+        for name in seg['PointCloudName']:
+            path = laz_dir / f'{name}.laz'
+            if not path.is_file() or path.stat().st_size == 0:
+                missing_laz.append(path.name)
+        if missing_laz:
+            examples = ', '.join(missing_laz[:5])
+            raise RuntimeError(
+                f'Tile Index blocked for {circuit}: {len(missing_laz)}/{len(seg)} '
+                f'expected LAZ tiles are missing or empty in {laz_dir}. '
+                f'Examples: {examples}. Generate the missing LAZ tiles first, '
+                'then regenerate Tile Index, or select LAZ + Tile Index together.'
+            )
+    trajectory_index = load_trajectory_index()
+    if trajectory_index is None or trajectory_index.empty:
+        raise RuntimeError(
+            f'Tile Index blocked for {circuit}: the central trajectory index is missing or empty. '
+            'Publish trajectory_index.parquet before generating the client Tile Index.'
+        )
+    tx = is_tx(circuit)
+    source_mode = source_inventory is not None
+    evidence_by_tile = {}
+    if source_mode:
+        import time
+        started = time.monotonic()
+        # Bound concurrent decompression to avoid excessive memory/disk pressure.
+        workers = min(4, resolve_parallel_workers(configured_parallel_workers(), len(seg)))
+        jobs = [(str(row.PointCloudName), row, intersecting_sources(row.geometry, source_inventory)) for _, row in seg.iterrows()]
+        print(f'Tile Index: reading cropped source GPS Time and PointSourceId for {len(jobs)} segments; workers={workers}; no LiDAR exports', flush=True)
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(source_segment_point_evidence, row, chosen, seg.crs): block for block, row, chosen in jobs}
+            for i, fut in enumerate(as_completed(futures), 1):
+                block = futures[fut]
+                try:
+                    evidence_by_tile[block] = fut.result()
+                except Exception as exc:
+                    raise RuntimeError(f'Tile Index source GPS scan failed for {block}: {exc}') from exc
+                if i % 10 == 0 or i == len(jobs):
+                    print(f'Tile Index GPS scan {i}/{len(jobs)}; elapsed={time.monotonic()-started:.1f}s', flush=True)
+    records = []
+    line_qa = []
+    for _, row in seg.iterrows():
+        name = str(row.PointCloudName)
+        if source_mode:
+            evidence = evidence_by_tile[name]
+        else:
+            evidence = final_tile_point_evidence(laz_dir / f'{name}.laz')
+            evidence_by_tile[name] = evidence
+        fldate, flightline, julian = trajectory_attributes_from_evidence(evidence, trajectory_index, name)
+        matches = legacy_trajectory_matches(evidence, trajectory_index)
+        zero_classes = evidence[2]
+        zero_count = sum(zero_classes.values())
+        ground_zero = zero_classes.get(2, 0)
+        status = ('FAIL_REAL_LINE_ZERO' if zero_count else
+                  'REVIEW_LEGACY_FLIGHT_ID' if matches else
+                  'NO_LINE_EVIDENCE' if not evidence[1] else 'NO_LEGACY_MATCH')
+        line_qa.append({'NAME': name, 'PointSourceIds': flightline, 'status': status,
+                        'real_line_zero_points': zero_count, 'ground_line_zero_points': ground_zero,
+                        'real_line_zero_by_class': json.dumps(zero_classes, sort_keys=True),
+                        'legacy_flight_match': bool(matches),
+                        'matched_line_ids': ', '.join(str(v) for v in sorted({i for i, _ in matches})),
+                        'matched_trajectories': ', '.join(n for _, n in matches)})
+        if zero_count:
+            print(f'ERROR: {name}: {zero_count} non-synthetic points have Line 0 '
+                  f'(ground={ground_zero}; by class={zero_classes}); classification must correct Deduce Time.', flush=True)
+        if matches:
+            print(f'WARNING: {name}: possible unsplit flight numbering: {matches}', flush=True)
+        if tx:
+            rec = {
                 'BlockNum': str(row.TileSeq),
                 'ZONE': str(zone),
                 'YEAR': str(YEAR),
                 'LINE': str(circuit),
-                'NAME': str(row.DeliveryName),
+                'NAME': str(row.PointCloudName),
                 'fldate': fldate,
                 'Flightline': flightline,
-                'geometry': row.geometry,
-            })
-        frame = gpd.GeoDataFrame(records, geometry='geometry', crs=seg.crs)
-    else:
-        frame = gpd.GeoDataFrame({
-            'PRJ_NAME': [client_name] * len(seg),
-            'YEAR': [str(YEAR)] * len(seg),
-            'ZONE': [str(zone)] * len(seg),
-            'geometry': list(seg.geometry),
-        }, geometry='geometry', crs=seg.crs)
+            }
+        else:
+            rec = {
+                'BlockNum': str(row.TileSeq),
+                'PRJ_NAME': client_name,
+                'YEAR': str(YEAR),
+                'ZONE': str(zone),
+                'NAME': str(row.PointCloudName),
+                'flline_id': julian,
+                'flightid': flightline,
+                'WONum': '',
+                'fldate': fldate,
+                'Flightline': flightline,
+            }
+        rec['geometry'] = row.geometry
+        records.append(rec)
+    qa = base / 'QA' / 'TILES'
+    qa.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame(line_qa).to_csv(qa / 'TILES_line_number_qa.csv', index=False, encoding='utf-8-sig')
+    legacy_count = sum(r['legacy_flight_match'] for r in line_qa)
+    zero_fail_count = sum(r['real_line_zero_points'] > 0 for r in line_qa)
+    zero_total = sum(r['real_line_zero_points'] for r in line_qa)
+    ground_zero_total = sum(r['ground_line_zero_points'] for r in line_qa)
+    print(f'Tile Index line numbering: {legacy_count}/{len(line_qa)} tiles with possible legacy IDs; '
+          f'{zero_fail_count}/{len(line_qa)} FAIL_REAL_LINE_ZERO ({zero_total} points, '
+          f'{ground_zero_total} ground); see TILES_line_number_qa.csv', flush=True)
+    frame = gpd.GeoDataFrame(records, geometry='geometry', crs=seg.crs)
+    if not tx:
+        # Nullable 32-bit integer, including tiles without flight metadata.
+        frame['flline_id'] = pd.array(frame['flline_id'], dtype='Int32')
+    missing = int(((frame['Flightline'] == '') | (frame['fldate'] == '')).sum())
+    if missing == len(frame):
+        raise RuntimeError(
+            f'Tile Index blocked for {circuit}: no flight metadata matched any of the '
+            f'{len(frame)} segments. Check PDAL, source GPS Time and the trajectory index.'
+        )
+    if missing:
+        print(f'WARNING: Tile Index {circuit}: {missing}/{len(frame)} tiles have no matched flight metadata.', flush=True)
+    print('Tile Index line IDs come from PointSourceId; dates are independent GPS-range candidates.', flush=True)
 
     if frame.geom_type.isin(['MultiPolygon']).any():
         raise ValueError('Client Tile Index requires one singlepart polygon per tile; multipart segment detected')
@@ -635,6 +1056,8 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
     qa = base / 'QA' / 'TILES'
     qa.mkdir(parents=True, exist_ok=True)
     frame.drop(columns='geometry').to_csv(qa / 'TILES_attributes.csv', index=False, encoding='utf-8-sig')
+    if source_mode:
+        pd.DataFrame([{'NAME': name, 'gps_min': rng[0] if rng else None, 'gps_max': rng[1] if rng else None, 'PointSourceIds': ', '.join(str(v) for v in ids)} for name, (rng, ids, _zero_classes) in evidence_by_tile.items()]).sort_values('NAME').to_csv(qa / 'TILES_source_gps.csv', index=False, encoding='utf-8-sig')
     (qa / 'TILES_schema.json').write_text(json.dumps({
         'entity': circuit,
         'client_entity_name': client_name,
@@ -645,8 +1068,24 @@ def build_tile_index_shp(circuit: str, seg: gpd.GeoDataFrame, base: Path, *, laz
         'fields': [c for c in frame.columns if c != 'geometry'],
         'zone': str(zone),
         'year': str(YEAR),
-        'tx_trajectory_attribution': bool(is_tx(circuit)),
-        'trajectory_index': str(TRAJECTORY_ROOT / 'trajectory_index.parquet') if is_tx(circuit) else None,
+        'tx_trajectory_attribution': bool(tx),
+        'trajectory_attribution': 'POINT_SOURCE_ID_LINES_GPS_RANGE_DATES',
+        'flightline_source': 'LAS PointSourceId (unique nonzero real-point values, sorted)',
+        'point_evidence_filter': TILE_EVIDENCE_FILTER,
+        'line_zero_qa_expression': LINE_ZERO_QA_EXPRESSION,
+        'real_line_zero_fail_tiles': zero_fail_count,
+        'real_line_zero_points': zero_total,
+        'ground_line_zero_points': ground_zero_total,
+        'line_number_qa_status': 'FAIL' if zero_fail_count else 'REVIEW' if legacy_count or missing else 'NO_LEGACY_MATCH',
+        'legacy_line_number_review_tiles': legacy_count,
+        'legacy_line_number_qa': str(qa / 'TILES_line_number_qa.csv'),
+        'legacy_line_number_rule': 'Time-overlapping ABDDDYY_Gnnn_N trajectory -> DDDN; warning only',
+        'fldate_rule': 'Distinct acquisition dates from GPS-range candidates; not positional mapping to Flightline',
+        'gps_evidence': 'CROPPED_SOURCE_POINTS' if source_mode else 'FINAL_LAZ',
+        'trajectory_index': str(TRAJECTORY_ROOT / 'trajectory_index.parquet'),
+        'tiles_without_flight_metadata': missing,
+        'dx_flline_id_rule': 'earliest matched acquisition date, DDDYY integer' if not tx else None,
+        'dx_flightid_rule': 'same as Flightline' if not tx else None,
         'note': 'OBJECTID/Shape and GDB geometry fields are created later when this SHP is imported into the final delivery GDB.',
     }, indent=2), encoding='utf-8')
     return shp, frame
@@ -665,7 +1104,10 @@ def pipeline_for_segment(seg_row, chosen, laz_out: Path, temp_las: Path | None, 
     endpoints = []
     for idx, r in enumerate(chosen):
         tag = f'reader_{idx}'
-        stages.append({'type': 'readers.las', 'filename': r['path'], 'tag': tag})
+        reader = {'type': 'readers.las', 'filename': r['path'], 'tag': tag}
+        if r.get('assigned_crs_wkt'):
+            reader['default_srs'] = r['assigned_crs_wkt']
+        stages.append(reader)
         endpoints.append(tag)
     if len(endpoints) > 1:
         stages.append({'type': 'filters.merge', 'inputs': endpoints, 'tag': 'merged'})
@@ -831,6 +1273,14 @@ def run_pdal_segment(seg_row, chosen, laz_out: Path, temp_las: Path | None, crs)
         manifest.write_text(json.dumps(pipeline, indent=2), encoding='utf-8')
         try:
             run(['pdal', 'pipeline', str(manifest)])
+            if any(r.get('assigned_crs_wkt') for r in chosen):
+                for output in (laz_out, temp_las):
+                    if output is None:
+                        continue
+                    header = pdal_summary(output)
+                    if not header['crs_wkt'] or not CRS.from_wkt(header['crs_wkt']).equals(CRS.from_user_input(crs)):
+                        raise RuntimeError(f'Output CRS verification failed after missing-header assignment: {output}')
+                    print(f'Output CRS verification PASS: {output.name}', flush=True)
         except Exception:
             if laz_out.exists():
                 laz_out.unlink()
@@ -1076,19 +1526,22 @@ def validate_pdal_available():
     return (p.stdout or p.stderr).strip()
 
 
-def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, make_zlas=False, make_index=False, overwrite=False, ezlas_exe=None):
+def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, make_zlas=False, make_index=False, overwrite=False, ezlas_exe=None, index_only=False):
+    if index_only and (not make_index or make_zlas or source_folder is None):
+        raise ValueError('--index-only requires --tile-index and --source, without --zlas')
     pdal_version = validate_pdal_available() if source_folder is not None else None
 
     polygon = find_polygon_shp(aoi_input)
     circuit = circuit_from_polygon(polygon)
     aoi = load_aoi_revision(circuit, polygon)
+    circuit = aoi['entity_id']
     segment_shp, seg = load_segments(circuit, aoi['revision_code'])
     if not CRS.from_user_input(seg.crs).equals(aoi['crs']):
         raise ValueError(f'Segment CRS does not match central AOI CRS for {circuit}')
 
     base = output_base(Path(output_root), circuit)
-    laz_dir = base / 'LAZ'
-    zlas_dir = base / 'zLAS'
+    laz_dir = base / product_folder('LAZ')
+    zlas_dir = base / product_folder('zLAS')
     qa_dir = base / 'QA' / 'LiDAR'
     temp_dir = qa_dir / 'temp_las_for_zlas'
     qa_dir.mkdir(parents=True, exist_ok=True)
@@ -1107,8 +1560,21 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
         (qa_dir / 'execution.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
         return summary
 
-    files = source_clouds(source_folder)
+    with sqlite3.connect(str(DB_PATH)) as con:
+        known_entities = [row[0] for row in con.execute("SELECT entity_id FROM entities")]
+    files, selection_mode = select_entity_clouds(source_folder, circuit, known_entities)
+    print(f"LiDAR source selection for {circuit}: {selection_mode}, {len(files)} file(s)", flush=True)
     inventory, point_cloud_crs, cloud_crs_meta = cloud_inventory(files, aoi['crs'], qa_dir)
+
+    if index_only:
+        tile_index_path, _ = build_tile_index_shp(circuit, seg, base, source_inventory=inventory)
+        summary = {'created_at': now_iso(), 'circuit': circuit, 'aoi_revision': aoi['revision_code'],
+                   'segments_source': str(segment_shp), 'source_point_cloud_folder': str(source_folder),
+                   'source_file_count': len(files), 'tile_index_shp': str(tile_index_path),
+                   'mode': 'tile_index_only_from_source', 'output_root': str(base)}
+        (base / 'QA' / 'TILES' / 'execution.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
+        print(f'Tile Index SHP: {tile_index_path}', flush=True)
+        return summary
 
     ezlas = None
     if make_zlas:
@@ -1129,7 +1595,7 @@ def process(aoi_input: Path, source_folder: Path | None, output_root: Path, *, m
 
     segment_jobs = []
     for _, row in seg.iterrows():
-        segment_jobs.append((str(row.DeliveryName), row))
+        segment_jobs.append((str(row.PointCloudName), row))
 
     laz_workers = resolve_parallel_workers(configured_parallel_workers(), len(segment_jobs))
 
@@ -1342,6 +1808,7 @@ def main():
     ap.add_argument('--output-root', default=str(DEFAULT_OUTPUT_ROOT))
     ap.add_argument('--zlas', action='store_true')
     ap.add_argument('--tile-index', '--tiles-gdb', dest='tile_index', action='store_true', help='Create intermediate Tile Index shapefile for later import into the final delivery GDB')
+    ap.add_argument('--index-only', action='store_true', help='Use cropped source LAS/LAZ GPS Time; do not export LiDAR')
     ap.add_argument('--overwrite', action='store_true')
     ap.add_argument('--ezlas-exe')
     a = ap.parse_args()
@@ -1352,7 +1819,7 @@ def main():
             raise ValueError('--source is required unless --tile-index is the only requested product')
         process(
             Path(a.aoi), Path(a.source) if a.source else None, Path(a.output_root),
-            make_zlas=a.zlas, make_index=a.tile_index, overwrite=a.overwrite, ezlas_exe=a.ezlas_exe,
+            make_zlas=a.zlas, make_index=a.tile_index, overwrite=a.overwrite, ezlas_exe=a.ezlas_exe, index_only=a.index_only,
         )
         return 0
     except Exception as exc:

@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+from circuit_identity import resolve_circuit_id
+
 import argparse
 import csv
+import hashlib
 import json
 import math
 import os
@@ -27,7 +30,7 @@ from shapely import wkb
 from shapely.geometry import box
 from shapely.ops import unary_union
 
-from atco_delivery import enrich_segments, output_base
+from atco_delivery import enrich_segments, output_base, product_folder
 
 CENTRAL_ROOT = Path(r"W:\APPS\PIT\ATCO")
 DB_PATH = CENTRAL_ROOT / "database" / "atco_aoi_master.sqlite"
@@ -101,12 +104,8 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
         raise ValueError(f'No valid AOI polygon geometry: {selected_polygon}')
 
     with db_connect_readonly(DB_PATH) as con:
-        entity = con.execute(
-            "SELECT current_revision FROM entities WHERE entity_kind='circuit' AND entity_id=?",
-            (circuit,),
-        ).fetchone()
-        if not entity:
-            raise ValueError(f'{circuit} is not registered in the central AOI database')
+        canonical_circuit, current_revision_id = resolve_circuit_id(con, circuit)
+        circuit = canonical_circuit
         rows = con.execute(
             """SELECT id, revision_num, revision_code, source_version, crs_wkt, polygon_wkb, source_folder
                FROM revisions WHERE entity_kind='circuit' AND entity_id=? ORDER BY revision_num""",
@@ -129,7 +128,6 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
         if diff <= 0.05:
             matches.append((row, diff, target_crs, central_geom))
 
-    current_revision_id = int(entity[0])
     if not matches:
         current = next((r for r in rows if int(r[0]) == current_revision_id), rows[-1])
         raise RuntimeError(
@@ -145,6 +143,7 @@ def load_aoi_revision(circuit: str, selected_polygon: Path):
             'Use the current production AOI.'
         )
     return {
+        'entity_id': circuit,
         'revision_id': row[0],
         'revision_num': int(row[1]),
         'revision_code': row[2],
@@ -333,6 +332,7 @@ def write_prj(path: Path, crs):
 
 
 def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_count: int, crs, res, overwrite=False):
+    """Write and verify a complete tile in bounded windows on the original grid."""
     out_tif.parent.mkdir(parents=True, exist_ok=True)
     if out_tif.exists() and not overwrite:
         return 'exists', 0, 0.0
@@ -344,20 +344,13 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
     if not chosen:
         return 'no source coverage', 0, 0.0
     datasets = []
+    final_tmp = out_tif.with_suffix('.nodata.tmp.tif')
     try:
         for p in chosen:
             datasets.append(rasterio.open(p))
-        # ATCO source ortho backgrounds can use RGBI=(254,254,254,254)
-        # or (255,255,255,255) as unmasked fill values. Reject both tuples
-        # *before* mosaicking: otherwise method='first' may select the white
-        # fringe and obscure real imagery from an overlapping source.
-        #
-        # The fifth merge band is an in-memory validity marker. It is never
-        # written to the client TIFF (which retains exactly four RGBI bands).
+        # Maintain the original first-valid RGBI overlap rule. The fifth
+        # temporary band is a validity marker, not a delivery band.
         def merge_first_nonwhite(merged_data, new_data, merged_mask, new_mask, **kwargs):
-            # Rasterio can pass a scalar False mask for a completely
-            # unmasked source, rather than a 4 x height x width array.
-            # Support scalar, 2-D dataset and per-band 3-D masks.
             mask = np.asarray(new_mask, dtype=bool)
             if mask.ndim == 0:
                 candidate = np.full(new_data.shape[1:], not bool(mask), dtype=bool)
@@ -370,73 +363,78 @@ def export_tile(blocknum: str, bounds, circuit_aoi, files, out_tif: Path, band_c
             np.copyto(merged_data[:4], new_data[:4], where=copy_pixel[None, :, :])
             merged_data[4][copy_pixel] = 1
 
-        arr, affine = merge(
-            datasets,
-            bounds=bounds,
-            res=res,
-            indexes=[1, 2, 3, 4],
-            output_count=5,
-            masked=False,
-            nodata=0,
-            method=merge_first_nonwhite,
-            target_aligned_pixels=False,
-        )
-        source_valid = arr[4] == 1
-        data = arr[:4].copy()
-        aoi_valid = geometry_mask([circuit_aoi], out_shape=data.shape[1:], transform=affine, invert=True)
-        valid = source_valid & aoi_valid
-        valid_pixels = int(valid.sum())
-        total_pixels = int(valid.size)
-        coverage_pct = (100.0 * valid_pixels / total_pixels) if total_pixels else 0.0
-
-        # ArcGIS Pro compatibility: restore explicit GeoTIFF NoData=255
-        # while retaining the newer source overlap/background exclusion above.
-        # Any valid sample equal to 255 is nudged to 254 so GIS renderers that
-        # apply band-level nodata do not hide legitimate bright image pixels.
-        # This is a deliberate rollback of the TIFF internal-mask approach.
-        valid_255 = (data == 255) & valid[None, :, :]
-        if np.any(valid_255):
-            data[valid_255] = 254
-        data[:, ~valid] = 255
-
+        left, bottom, right, top = bounds
+        rx, ry = res
+        width = int(round((right - left) / rx))
+        height = int(round((top - bottom) / ry))
+        if width <= 0 or height <= 0:
+            raise ValueError(f'Invalid raster dimensions for {blocknum}: {width} x {height}')
+        affine = rasterio.transform.from_origin(left, top, rx, ry)
+        dtype = datasets[0].dtypes[0]
+        window_size = 1024
         profile = datasets[0].profile.copy()
         for key in ('blockxsize', 'blockysize', 'photometric', 'interleave', 'nodata'):
             profile.pop(key, None)
-        profile.update(
-            driver='GTiff', height=data.shape[1], width=data.shape[2], count=4,
-            dtype=data.dtype, transform=affine, crs=crs, nodata=255,
-            tiled=True, blockxsize=512, blockysize=512, compress='lzw',
-            photometric='RGB', BIGTIFF='IF_SAFER',
-        )
-        final_tmp = out_tif.with_suffix('.nodata.tmp.tif')
+        profile.update(driver='GTiff', height=height, width=width, count=4,
+                       dtype=dtype, transform=affine, crs=crs, nodata=255,
+                       tiled=True, blockxsize=512, blockysize=512, compress='lzw',
+                       photometric='RGB', BIGTIFF='IF_SAFER')
+        valid_pixels = 0
+        total_pixels = width * height
+        expected = []
+        source_bounds = [(ds, tuple(ds.bounds)) for ds in datasets]
         if final_tmp.exists():
             final_tmp.unlink()
         with rasterio.open(final_tmp, 'w', **profile) as dst:
-            dst.write(data)
-            dst.colorinterp = (
-                ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.undefined
-            )
-            dst.update_tags(
-                ATCO_BLOCKNUM=blocknum,
-                ATCO_BACKGROUND_RULE='RGBI background 255,255,255,255; valid 255 values adjusted to 254',
-                ATCO_BAND4='NIR',
-            )
+            dst.colorinterp = (ColorInterp.red, ColorInterp.green,
+                               ColorInterp.blue, ColorInterp.undefined)
+            for row in range(0, height, window_size):
+                for col in range(0, width, window_size):
+                    window = rasterio.windows.Window(col, row,
+                        min(window_size, width-col), min(window_size, height-row))
+                    wb = rasterio.windows.bounds(window, affine)
+                    wt = rasterio.windows.transform(window, affine)
+                    shape = (int(window.height), int(window.width))
+                    candidates = [ds for ds, b in source_bounds
+                                  if b[0] < wb[2] and b[2] > wb[0]
+                                  and b[1] < wb[3] and b[3] > wb[1]]
+                    aoi_valid = geometry_mask([circuit_aoi], out_shape=shape,
+                                              transform=wt, invert=True)
+                    if candidates and aoi_valid.any():
+                        arr, actual_transform = merge(
+                            candidates, bounds=wb, res=res, indexes=[1, 2, 3, 4],
+                            output_count=5, masked=False, nodata=0, dtype=dtype,
+                            method=merge_first_nonwhite, target_aligned_pixels=False)
+                        if arr.shape != (5, *shape) or not actual_transform.almost_equals(wt):
+                            raise RuntimeError(f'Window grid mismatch: {blocknum} {window}')
+                        valid = (arr[4] == 1) & aoi_valid
+                        data = arr[:4]
+                        # Preserve the ArcGIS Pro NoData=255 convention.
+                        data[(data == 255) & valid[None, :, :]] = 254
+                        data[:, ~valid] = 255
+                        valid_pixels += int(valid.sum())
+                    else:
+                        data = np.full((4, *shape), 255, dtype=dtype)
+                    dst.write(data, window=window)
+                    expected.append((window, hashlib.sha256(data.tobytes()).digest()))
+        # Read back every window, never the complete image. Compare the
+        # uncompressed pixel bytes including both valid and NoData pixels.
         with rasterio.open(final_tmp) as check:
-            if check.nodata != 255:
-                raise RuntimeError(f'Expected GeoTIFF NoData=255 for ArcGIS Pro: {final_tmp}')
-            if not np.array_equal(check.read()[:, ~valid], np.full((4, (~valid).sum()), 255, dtype=data.dtype)):
-                raise RuntimeError(f'Output TIFF invalid pixels not set to 255: {final_tmp}')
-            if not np.array_equal(check.read()[:, valid], data[:, valid]):
-                raise RuntimeError(f'Valid TIFF samples changed on write: {final_tmp}')
-
-        if out_tif.exists():
-            out_tif.unlink()
+            if (check.nodata != 255 or check.count != 4 or check.width != width
+                    or check.height != height or not check.transform.almost_equals(affine)):
+                raise RuntimeError(f'Output TIFF metadata mismatch: {final_tmp}')
+            for window, digest in expected:
+                if hashlib.sha256(check.read(window=window).tobytes()).digest() != digest:
+                    raise RuntimeError(f'Output TIFF samples changed on write: {final_tmp} {window}')
         final_tmp.replace(out_tif)
         write_prj(out_tif, crs)
+        coverage_pct = 100.0 * valid_pixels / total_pixels
         return f'created from {len(chosen)} source(s)', valid_pixels, coverage_pct
     finally:
         for ds in datasets:
             ds.close()
+        if final_tmp.exists():
+            final_tmp.unlink()
 
 
 def load_config():
@@ -481,7 +479,7 @@ def gms_quote(path: Path):
 def build_gm_rgb_input(src_tif: Path, out_tif: Path):
     """Three-band visual ECW source: RGB, with invalid TIFF pixels set white.
 
-    The client TIFF keeps four RGBI bands and its internal dataset mask.
+    The client TIFF keeps four RGBI bands and uses explicit NoData=255.
     The Global Mapper ECW input has neither NIR nor Alpha nor scalar NoData.
     """
     out_tif.parent.mkdir(parents=True, exist_ok=True)
@@ -842,6 +840,7 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
     circuit = circuit_from_polygon(polygon)
     print(f'Circuit: {circuit}', flush=True)
     aoi = load_aoi_revision(circuit, polygon)
+    circuit = aoi['entity_id']
     print(f'AOI: {aoi["revision_code"]} confirmed against central registry', flush=True)
     segment_shp, seg = load_segments(circuit, aoi['revision_code'])
     if not CRS.from_user_input(seg.crs).equals(aoi['crs']):
@@ -852,8 +851,8 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
     print(f'Raster grid: {res[0]:g} x {res[1]:g} m; data bands: {band_count}', flush=True)
 
     base = output_base(Path(output_root), circuit)
-    tif_dir = base/'TIFF'
-    ecw_dir = base/'ECW'
+    tif_dir = base / product_folder('TIFF')
+    ecw_dir = base / product_folder('ECW')
     qa_root = base/'QA'
     qa_dir = qa_root/'Imagery'
     index_dir = qa_root/'Ortho_Processing_Footprints'
@@ -877,6 +876,7 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
         tiff_jobs.append((blocknum, row.geometry.bounds, tif_dir/f'{blocknum}.tif'))
 
     tiff_workers = resolve_parallel_workers(configured_parallel_workers(), len(tiff_jobs))
+    print('TIFF export: 1024 x 1024 pixel windows; windowed read-back QA.', flush=True)
 
     def _tiff_job(job):
         blocknum, bounds, out_tif = job
@@ -946,7 +946,7 @@ def process(aoi_path: Path, source_folder: Path, output_root: Path, make_ecw=Tru
         'ecw_bands': 3 if make_ecw else None, 'pixel_size': list(res),
         'ortho_processing_footprint_count': len(ortho_index), 'footprint_gap_m2': gap,
         'footprint_overlap_m2': overlap_m2, 'footprint_overlap_pairs': overlap_pairs,
-        'tiff_background': '4-band RGBI with an internal TIFF validity mask; valid 255 preserved; nodata unset',
+        'tiff_background': '4-band RGBI; NoData=255; invalid pixels white; valid 255 normalized to 254',
         'ecw_background': '3-band RGB with white background (255,255,255), no alpha, ECW v3' if make_ecw else None,
         'ecw_rgb_source': 'dedicated 3-band RGB copy of TIFF bands 1/2/3, white fill outside validity mask' if make_ecw else None,
         'parallel_workers_config': configured_parallel_workers(), 'output_root': str(base),
@@ -977,6 +977,7 @@ def interactive():
         polygon = find_polygon_shp(Path(aoi_input))
         circuit = circuit_from_polygon(polygon)
         aoi = load_aoi_revision(circuit, polygon)
+        circuit = aoi['entity_id']
         shp, seg = load_segments(circuit, aoi['revision_code'])
         print('Index-only mode needs source raster grid to align footprint edges exactly.')
         source = input('Source orthophoto TIFF folder: ').strip().strip('"')
@@ -1025,4 +1026,6 @@ def main():
 
 
 if __name__ == '__main__':
-    raise SystemExit(main())
+    # GDAL cache is process-wide, not a separate budget per TIFF worker.
+    with rasterio.Env(GDAL_CACHEMAX=128 * 1024 * 1024):
+        raise SystemExit(main())
